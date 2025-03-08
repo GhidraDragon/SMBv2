@@ -6,6 +6,12 @@
 #include <stdint.h>
 #include <errno.h>
 
+/* Vulnerability analysis:
+   - Potential buffer overflows if server returns more data than expected.
+   - No authentication handling; an attacker could hijack or tamper with session if not using SMB signing.
+   - Possible integer overflows in length calculations if malicious server manipulates fields.
+   - Code is for authorized security testing; unauthorized use is prohibited. */
+
 #pragma pack(push, 1)
 
 typedef struct _SMB2Header {
@@ -31,6 +37,7 @@ typedef struct _SMB2Header {
 #define SMB2_CLOSE           0x0006
 #define SMB2_READ            0x0008
 #define SMB2_WRITE           0x0009
+#define SMB2_IOCTL           0x000B  /* Added for SMB2 IOCTL demonstration */
 
 #define STATUS_SUCCESS                0x00000000
 #define STATUS_INVALID_PARAMETER      0xC000000D
@@ -201,6 +208,36 @@ typedef struct _SMB2CloseResponse {
     uint64_t EndOfFile;
     uint32_t FileAttributes;
 } SMB2CloseResponse;
+
+typedef struct _SMB2IOCTLRequest {
+    uint16_t StructureSize;
+    uint16_t Reserved;
+    uint32_t CtlCode;
+    uint64_t FileIdPersistent;
+    uint64_t FileIdVolatile;
+    uint32_t InputOffset;
+    uint32_t InputCount;
+    uint32_t MaxInputResponse;
+    uint32_t OutputOffset;
+    uint32_t OutputCount;
+    uint32_t MaxOutputResponse;
+    uint32_t Flags;
+    uint32_t Reserved2;
+} SMB2IOCTLRequest;
+
+typedef struct _SMB2IOCTLResponse {
+    uint16_t StructureSize;
+    uint16_t Reserved;
+    uint32_t CtlCode;
+    uint64_t FileIdPersistent;
+    uint64_t FileIdVolatile;
+    uint32_t InputOffset;
+    uint32_t InputCount;
+    uint32_t OutputOffset;
+    uint32_t OutputCount;
+    uint32_t Flags;
+    uint32_t Reserved2;
+} SMB2IOCTLResponse;
 
 #pragma pack(pop)
 
@@ -494,17 +531,6 @@ int doReadPipe(unsigned char *outBuf, size_t outBufSize, uint32_t *outBytesRead)
     return 0;
 }
 
-int doDCERPCBind() {
-    unsigned char dcerpcBindStub[] = {
-        0x05, 0x00,
-        0x0B,
-        0x10,
-        0x00, 0x00, 0x00, 0x00
-    };
-    printf("[Client] Sending partial DCERPC bind stub...\n");
-    return doWritePipe(dcerpcBindStub, sizeof(dcerpcBindStub));
-}
-
 int doClosePipe() {
     SMB2Header hdr;
     buildSMB2Header(SMB2_CLOSE, gTreeId, gSessionId, &hdr);
@@ -529,14 +555,20 @@ int doClosePipe() {
     return 0;
 }
 
-/* Example stub showing additional DCERPC calls to SVCCTL (incomplete) */
+int doDCERPCBind() {
+    unsigned char dcerpcBindStub[] = {
+        0x05, 0x00,
+        0x0B,
+        0x10,
+        0x00, 0x00, 0x00, 0x00
+    };
+    printf("[Client] Sending partial DCERPC bind stub...\n");
+    return doWritePipe(dcerpcBindStub, sizeof(dcerpcBindStub));
+}
+
 int doSVCCTLCreateService(const char *serviceName, const char *binPath) {
     unsigned char dceRequest[512];
     memset(dceRequest, 0, sizeof(dceRequest));
-    /* Oversimplified stub with minimal DCERPC marshalling. 
-       Would normally include operation number, context IDs, etc. */
-
-    /* Just place some pseudo data indicating a CreateService call */
     size_t index = 0;
     dceRequest[index++] = 0x05; 
     dceRequest[index++] = 0x00;
@@ -546,18 +578,77 @@ int doSVCCTLCreateService(const char *serviceName, const char *binPath) {
     dceRequest[index++] = 0x00; 
     dceRequest[index++] = 0x00; 
     dceRequest[index++] = 0x00; 
-    /* Service name, ASCII as placeholder */
     for (size_t i=0; i<strlen(serviceName) && index<500; i++) {
         dceRequest[index++] = (unsigned char)serviceName[i];
     }
     dceRequest[index++] = 0;
-    /* Binary path */
     for (size_t i=0; i<strlen(binPath) && index<511; i++) {
         dceRequest[index++] = (unsigned char)binPath[i];
     }
     dceRequest[index++] = 0;
     printf("[Client] Sending partial CreateService stub...\n");
     return doWritePipe(dceRequest, index);
+}
+
+int doSRVSVCNetShareEnum() {
+    unsigned char dceRequest[512];
+    memset(dceRequest, 0, sizeof(dceRequest));
+    size_t idx = 0;
+    dceRequest[idx++] = 0x05;
+    dceRequest[idx++] = 0x00;
+    dceRequest[idx++] = 0x00;
+    dceRequest[idx++] = 0x10;
+    dceRequest[idx++] = 0x00;
+    dceRequest[idx++] = 0x00;
+    dceRequest[idx++] = 0x00;
+    dceRequest[idx++] = 0x00;
+    dceRequest[idx++] = 0xE0;
+    dceRequest[idx++] = 0x03; 
+    dceRequest[idx++] = 0x00; 
+    dceRequest[idx++] = 0x00;
+    return doWritePipe(dceRequest, idx);
+}
+
+/* Additional function: doIOCTL to demonstrate SMB2 IOCTL usage (can be used in various red-team scenarios) */
+int doIOCTL(uint32_t ctlCode, const unsigned char *inData, size_t inLen) {
+    SMB2Header hdr;
+    buildSMB2Header(SMB2_IOCTL, gTreeId, gSessionId, &hdr);
+    SMB2IOCTLRequest ireq;
+    memset(&ireq, 0, sizeof(ireq));
+    ireq.StructureSize      = 57;
+    ireq.CtlCode            = ctlCode;
+    ireq.FileIdPersistent   = gPipeFidPersistent;
+    ireq.FileIdVolatile     = gPipeFidVolatile;
+    ireq.InputOffset        = sizeof(SMB2IOCTLRequest);
+    ireq.InputCount         = (uint32_t)inLen;
+    ireq.MaxInputResponse   = 1024;
+    ireq.OutputOffset       = 0;
+    ireq.OutputCount        = 0;
+    ireq.MaxOutputResponse  = 1024;
+
+    size_t totalSize = sizeof(ireq) + inLen;
+    unsigned char *reqBuf = (unsigned char *)malloc(totalSize);
+    if (!reqBuf) {
+        fprintf(stderr, "malloc doIOCTL failed\n");
+        return -1;
+    }
+    memcpy(reqBuf, &ireq, sizeof(ireq));
+    memcpy(reqBuf + sizeof(ireq), inData, inLen);
+    if (sendSMB2Request(&hdr, reqBuf, totalSize) < 0) {
+        free(reqBuf);
+        return -1;
+    }
+    free(reqBuf);
+    SMB2Header respHdr;
+    unsigned char buf[1024];
+    ssize_t payloadLen;
+    if (recvSMB2Response(&respHdr, buf, sizeof(buf), &payloadLen) < 0) return -1;
+    if (respHdr.Status != STATUS_SUCCESS) {
+        fprintf(stderr, "IOCTL failed, status=0x%08X\n", respHdr.Status);
+        return -1;
+    }
+    printf("[Client] SMB2 IOCTL call successful.\n");
+    return 0;
 }
 
 int main(int argc, char *argv[]) {
@@ -615,8 +706,12 @@ int main(int argc, char *argv[]) {
         fprintf(stderr, "DCERPC bind stub failed.\n");
     }
 
-    /* Example usage of a partial create-service call (stub) */
     doSVCCTLCreateService("TestSvc", "C:\\Windows\\System32\\cmd.exe /c calc.exe");
+    doSRVSVCNetShareEnum();
+
+    /* Example IOCTL usage with no real data, can be extended for advanced attacks. */
+    unsigned char dummyIoctlData[] = { 0x01, 0x02, 0x03, 0x04 };
+    doIOCTL(0x0011C017, dummyIoctlData, sizeof(dummyIoctlData));
 
     unsigned char readBuf[512];
     memset(readBuf, 0, sizeof(readBuf));
