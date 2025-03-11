@@ -8,3 +8,44 @@ https://boshang.io/
 
 
 ![912](https://github.com/user-attachments/assets/9d1e84d3-41ab-4c4d-ae4f-9d669640ddbd)
+
+
+gcc -o smb2_pipe_exec_client smb2_pipe_exec_client.c
+
+Run:
+
+./smb2_pipe_exec_client <server_ip> <server_port>
+Example:
+./smb2_pipe_exec_client 192.168.1.10 445
+The client will attempt a minimal negotiation, session setup, tree connect, and named pipe open. Then it will send a fake or partial DCERPC bind request and try to read a response.
+
+5. Exploring Further: Samba and Named Pipes
+To see a production-grade SMBv2/3 implementation in open-source form, Samba is an excellent reference:
+
+Clone and Build Samba:
+
+git clone https://gitlab.com/samba-team/samba.git
+cd samba
+./configure --enable-debug
+make -j$(nproc)
+Enable SMBv2/3 in smb.conf:
+
+[global]
+    server min protocol = SMB2_02
+    server max protocol = SMB3
+Compare the code under source3/smbd/smb2_* with this client to see the comprehensive logic a production server implements (authentication, encryption, signing, dialect negotiation, error handling, etc.).
+
+6. Real Exploit Development Lessons
+Complexity: Real vulnerabilities often arise from intricate logic or subtle boundary checks, not from simplistic “magic bullet” commands.
+DCERPC in Depth: Achieving RCE via named pipes typically involves DCERPC calls to SVCCTL or other privileged interfaces. You need correct marshalling, alignment, and authentication steps.
+Reverse-Engineering: Tools like IDA Pro or Ghidra help find memory corruption or logic flaws in SMB server implementations.
+Authentication & Signing: Properly implemented SMB security (NTLM/Kerberos, signing, encryption) significantly raises the bar for attackers.
+
+Modern SMB stacks offer:
+
+Larger reads/writes for improved performance.
+Credit-based flow control.
+Compound/pipelined requests.
+Optional encryption (introduced in SMB 3.x).
+Pre-auth integrity checks in SMB 3.1.1 to prevent tampering.
+A thorough understanding is critical for both deploying SMB securely and for advanced security research.
