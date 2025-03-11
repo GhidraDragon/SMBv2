@@ -1,12 +1,13 @@
-EternalBlue spread by scanning for SMBv1 servers with port 445 exposed, exploiting SMBv1’s vulnerability (CVE-2017-0144) to execute remote code and propagate. It targeted SMBv1 servers, especially those exposed to the public internet, often running unpatched Windows versions. SMBv2 was not directly vulnerable to EternalBlue, as it was a later protocol. While SMBv2 is typically used internally and less often exposed to the internet, if misconfigured, it could still be at risk for other attacks.
+EternalBlue’s scanning mechanism doesn’t inherently distinguish between “public” and “private” servers—it targets any machine reachable on TCP port 445. In practice, here’s how it typically works:
+	1.	The malware scans an IP range (public or private) by attempting to open a TCP connection on port 445.
+	2.	If the connection succeeds, it sends a crafted SMB packet designed to negotiate SMB parameters.
+	3.	The response is analyzed to determine if the host is running an unpatched, vulnerable version of SMBv1.
+	4.	If the vulnerability is detected, the exploit is delivered to compromise the system.
 
+On public networks, this means randomly scanning the Internet for machines with port 445 open. Within private networks, an infected host will scan the local subnet (or other known internal ranges) for similarly vulnerable systems.
 
+In both cases, the scanning algorithm is the same—the difference lies solely in the IP range being targeted.
 
-
-
-SMBv2 is designed primarily for internal file sharing on private networks. In well-configured environments, SMBv2 services are protected by firewalls and are not accessible from the public internet. Only in cases of misconfiguration or when security best practices are not followed would an SMBv2 server be inadvertently exposed to the public. Essentially:
-	•	Public Exposure: SMBv2 servers should not be open to the public; if they are found on the public internet, it’s likely due to an error in network configuration.
-	•	Private Network: SMBv2 is intended to operate within private networks, where file sharing is needed, and is generally secure if proper network segmentation and firewall rules are in place.
 
 
 
