@@ -1,0 +1,1 @@
+./smb2_pipe_exec_client 151.101.194.167 445
