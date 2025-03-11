@@ -1,3 +1,15 @@
+EternalBlue spread by scanning for SMBv1 servers with port 445 exposed, exploiting SMBv1’s vulnerability (CVE-2017-0144) to execute remote code and propagate. It targeted SMBv1 servers, especially those exposed to the public internet, often running unpatched Windows versions. SMBv2 was not directly vulnerable to EternalBlue, as it was a later protocol. While SMBv2 is typically used internally and less often exposed to the internet, if misconfigured, it could still be at risk for other attacks.
+
+
+
+
+
+SMBv2 is designed primarily for internal file sharing on private networks. In well-configured environments, SMBv2 services are protected by firewalls and are not accessible from the public internet. Only in cases of misconfiguration or when security best practices are not followed would an SMBv2 server be inadvertently exposed to the public. Essentially:
+	•	Public Exposure: SMBv2 servers should not be open to the public; if they are found on the public internet, it’s likely due to an error in network configuration.
+	•	Private Network: SMBv2 is intended to operate within private networks, where file sharing is needed, and is generally secure if proper network segmentation and firewall rules are in place.
+
+
+
 The NSA created EternalBlue and the whole Eternal family of exploits on the SMBv1 protocol.
 
 I'm creating the same on the SMBv2 protocol, to make all Windows devices, servers, and other types of devices and servers, globally, allll mine!!!!! Yay!!!!! 
