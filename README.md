@@ -8,8 +8,14 @@ On public networks, this means randomly scanning the Internet for machines with 
 
 In both cases, the scanning algorithm is the same—the difference lies solely in the IP range being targeted.
 
+--------
 
 
+While properly closing port 445 greatly limits remote access, it doesn’t mean that vulnerabilities in SMBv2 don’t exist—they’re just less likely to be exploited remotely in the same dramatic fashion as EternalBlue. SMBv2 was designed with improved security over SMBv1, so high-impact remote code execution flaws like EternalBlue are rare in SMBv2. Instead, known vulnerabilities in SMBv2 tend to be less severe (e.g., enabling information disclosure or denial-of-service conditions) or require additional factors such as internal network access or authentication.
+
+
+
+------
 
 The NSA created EternalBlue and the whole Eternal family of exploits on the SMBv1 protocol.
 
