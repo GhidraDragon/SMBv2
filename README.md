@@ -17,6 +17,10 @@ While properly closing port 445 greatly limits remote access, it doesn’t mean 
 
 ------
 
+In README.md I added instructions on how to download and build and serve your own SMBv2 server, and Ghidra on it may offer insights past a closed port 445 GitHub I'm going to bed you guys take over!!
+
+------
+
 The NSA created EternalBlue and the whole Eternal family of exploits on the SMBv1 protocol.
 
 I'm creating the same on the SMBv2 protocol, to make all Windows devices, servers, and other types of devices and servers, globally, allll mine!!!!! Yay!!!!! 
