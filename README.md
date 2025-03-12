@@ -2,6 +2,10 @@
 
 But as far as I know the statues around this is very hmm..
 
+ANYWAYS, if the NSA wins, and this is publicly available on Etherenum so even Microsoft looking at it unless they refuse bid then well Russia, I mean I need two bidders at minimum, so .. I've seen lots of corporate white team baggers beg the NSA, the FBI, etc. beg beg beg
+
+Just remember even if you charge the NSA 1 point per ethereum and Microsoft 10, corporate shareholder Nadella responsibility is to eggplant_emoji's pockets probably.
+
 ![Screenshot 2025-03-12 at 9 03 07 AM](https://github.com/user-attachments/assets/5dac297c-be0d-4053-a0c1-8ce7b4eb5f42)
 
 
