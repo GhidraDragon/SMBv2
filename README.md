@@ -1,3 +1,11 @@
+3/12/25 - Planning Ethereum VM Smart Contract plan for now 👍 #Buterin This is CS50 r u ok? Perhaps Microsoft vs NSA only 2 bidders blind bid 1 each? With only 2 min price unfortunately - if North Korea serious then don't need min bidder... As far as I'm aware especially with President Billy Pam Bondi via Patal investigations have difficulties coming up with any logical arguments. They'll have better luck with can you believe it JD Vance??? or someone since Vance isn't up Putin's asshole extorting NATO etc. and didn't lie to attack Canada as his only legal rationale
+
+But as far as I know the statues around this is very hmm..
+
+![Screenshot 2025-03-12 at 9 03 07 AM](https://github.com/user-attachments/assets/5dac297c-be0d-4053-a0c1-8ce7b4eb5f42)
+
+
+
 3/12/25 update; so eggplant_emoji had the opportunity to go through 5 YC startups via Twitter yesterday. 4 of them were like "American AI" while the last made some nice OCR and that could only get better!
 
 If this repo leads to remote execution (currently it sends a sarcastic backgrounb smb pipe to every node visited) and not pre-patched, well... 
