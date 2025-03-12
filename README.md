@@ -1,3 +1,5 @@
+[https://docs.google.com/document/d/12yyNXhfdMLoZuvdV7TxO-JMuSwWhngFJ59WDjUWnz6s/edit?usp=sharing](https://docs.google.com/document/d/12yyNXhfdMLoZuvdV7TxO-JMuSwWhngFJ59WDjUWnz6s/edit?usp=sharing)
+
 EternalBlue’s scanning mechanism doesn’t inherently distinguish between “public” and “private” servers—it targets any machine reachable on TCP port 445. In practice, here’s how it typically works:
 	1.	The malware scans an IP range (public or private) by attempting to open a TCP connection on port 445.
 	2.	If the connection succeeds, it sends a crafted SMB packet designed to negotiate SMB parameters.
