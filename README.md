@@ -10,6 +10,10 @@ if Microsoft gets too smart and Google doesn't want to pay up to exploit them; o
 
 So it'll be a nice 3-way cash grab, then Microsoft gets her "responsible disclosure" after; go patch bitch unless u seriously want me to do too much source code unless wow deploying a Ghidra-patched to production? omg
 
+Speaking of Ghidra and NSA customer care's affiliation with apache, it probably doesn't take too long to sign it with verified Russian Federation etc. otherwise pointless to troll Apple cuz wow! I didn't think too hard before but all views that make it in without comment are available and you could access it however you want baby!!! I could add more files than Apple App review could handle; there's so many ways to potentially do this!
+
+https://apps.apple.com/us/app/algorithmicai-gaming-pdfsage/id6741389058
+
 ![Screenshot 2025-03-12 at 9 03 07 AM](https://github.com/user-attachments/assets/5dac297c-be0d-4053-a0c1-8ce7b4eb5f42)
 
 
