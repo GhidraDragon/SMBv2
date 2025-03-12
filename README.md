@@ -1,3 +1,7 @@
+3/12/25 update; so eggplant_emoji had the opportunity to go through 5 YC startups via Twitter yesterday. 4 of them were like "American AI" while the last made some nice OCR and that could only get better!
+
+If this repo leads to remote execution (currently it sends a sarcastic backgrounb smb pipe to every node visited) and not pre-patched, well... 
+
 [https://docs.google.com/document/d/12yyNXhfdMLoZuvdV7TxO-JMuSwWhngFJ59WDjUWnz6s/edit?usp=sharing](https://docs.google.com/document/d/12yyNXhfdMLoZuvdV7TxO-JMuSwWhngFJ59WDjUWnz6s/edit?usp=sharing)
 
 EternalBlue’s scanning mechanism doesn’t inherently distinguish between “public” and “private” servers—it targets any machine reachable on TCP port 445. In practice, here’s how it typically works:
