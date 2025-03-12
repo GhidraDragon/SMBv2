@@ -6,6 +6,8 @@ ANYWAYS, if the NSA wins, and this is publicly available on Etherenum so even Mi
 
 Just remember even if you charge the NSA 1 point per ethereum and Microsoft 10 eth per point, corporate shareholder Nadella responsibility is to eggplant_emoji's pockets probably.
 
+if Microsoft gets too smart and Google doesn't want to pay up to exploit them; only corporate white baggers have cash; i'll have to hop in a 3 way with the National Security Agency and Russia to talk about Microsoft money servers.. 
+
 ![Screenshot 2025-03-12 at 9 03 07 AM](https://github.com/user-attachments/assets/5dac297c-be0d-4053-a0c1-8ce7b4eb5f42)
 
 
