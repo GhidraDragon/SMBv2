@@ -6,6 +6,8 @@ Ok...
 
 Were any of these so called leaks ever substanciated by the Press? If not Tulsi Gabbard planted them, and well.. Pick your story what have I been subjected to since 2017? Take your pick if it's meth lol wtf are you guys doing?
 
+So normally it's only up then sleep then up right? then shift to "unsubstanciated" conspiracy theories
+
 ![image](https://github.com/user-attachments/assets/ec2b1fd1-e5a3-4ba9-89ac-7d68347fe8e7)
 
 They're saying Github left this as a public repo, and the original legally-blonde for like a month? Yet.. you've got a Tulsi Gabbard leak coeerced by whom?
