@@ -28,3 +28,7 @@ As used in this chapter—
 (iii) to affect the conduct of a government by mass destruction, assassination, or kidnapping; and
 
 https://uscode.house.gov/view.xhtml?path=/prelim@title18/part1/chapter113B&edition=prelim
+
+You guys, yes you Tulsi, don't even have 15 different agencies? Whom the fuck comes up with the script for these plants?
+
+![image](https://github.com/user-attachments/assets/abb1579d-d746-468d-a74b-ebc6ab564d7a)
