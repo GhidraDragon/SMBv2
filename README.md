@@ -36,7 +36,11 @@ https://en.wikipedia.org/wiki/Director_of_National_Intelligence
 https://www.nytimes.com/2025/02/25/us/politics/gabbard-nsa-firing-explicit-chat.html
 
 So I have the same position as Trump on this, and you guys actually still made me believe this was a real intelligence firing party to mock sexually explicit content, and it was about men not being allowed to play in female sports? wtf?
+
 ![image](https://github.com/user-attachments/assets/cee3340b-0843-49b5-a6a9-f5f0b13c981a)
 
 u have retard gitmo, if there's any evidence at all that may suggest such retard gitmo exist
 
+I deleted old videos, but oh no my front end web UI for YouTube is apparently temporarily bugged. Would it have anything to do with server-side stuff on Angular or equivalent? 
+
+https://www.youtube.com/watch?v=6UTQevHf1Bs
