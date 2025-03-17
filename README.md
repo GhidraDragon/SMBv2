@@ -32,3 +32,5 @@ https://uscode.house.gov/view.xhtml?path=/prelim@title18/part1/chapter113B&editi
 You guys, yes you Tulsi, don't even have 15 different agencies? Whom the fuck comes up with the script for these plants?
 
 ![image](https://github.com/user-attachments/assets/abb1579d-d746-468d-a74b-ebc6ab564d7a)
+
+https://www.nytimes.com/2025/02/25/us/politics/gabbard-nsa-firing-explicit-chat.html
