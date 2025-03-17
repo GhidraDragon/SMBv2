@@ -31,9 +31,11 @@ https://uscode.house.gov/view.xhtml?path=/prelim@title18/part1/chapter113B&editi
 
 You guys, yes you Tulsi, don't even have 15 different agencies? Whom the fuck comes up with the script for these plants?
 
+You have 4: the CIA, DIA, NSA, and FBI, as part of the NIP. (National Intelligence Program)
+
 ![image](https://github.com/user-attachments/assets/abb1579d-d746-468d-a74b-ebc6ab564d7a)
 
-You have 4: the CIA, DIA, NSA, and FBI, as part of the NIP. (National Intelligence Program)
+They're committing wtf retard gitmo to accomplish what? this repo and legally-blonde?
 
 https://en.wikipedia.org/wiki/Director_of_National_Intelligence
 
