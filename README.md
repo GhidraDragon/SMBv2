@@ -34,3 +34,5 @@ You guys, yes you Tulsi, don't even have 15 different agencies? Whom the fuck co
 ![image](https://github.com/user-attachments/assets/abb1579d-d746-468d-a74b-ebc6ab564d7a)
 
 https://www.nytimes.com/2025/02/25/us/politics/gabbard-nsa-firing-explicit-chat.html
+
+You have 3; the CIA, DIA, NSA, and FBI, as part of the NIP. (National Intelligence Program)
