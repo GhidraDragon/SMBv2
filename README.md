@@ -35,7 +35,7 @@ https://en.wikipedia.org/wiki/Director_of_National_Intelligence
 
 https://www.nytimes.com/2025/02/25/us/politics/gabbard-nsa-firing-explicit-chat.html
 
-So I have the same position as Trump on this, and you guys actually still made me believe this was real, and it was about men not being allowed to play in female sports? wtf? u have retard gitmo
+So I have the same position as Trump on this, and you guys actually still made me believe this was a real intelligence firing party to mock sexual content, and it was about men not being allowed to play in female sports? wtf? u have retard gitmo
 
 ![image](https://github.com/user-attachments/assets/cee3340b-0843-49b5-a6a9-f5f0b13c981a)
 
