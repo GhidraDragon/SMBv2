@@ -4,7 +4,7 @@ They committed which points of compromise in which ways against a shit-talking (
 
 Ok...
 
-Were any of these so called leaks ever substanciated by the Press? If not Tulsi Gabbard planted them, and well..
+Were any of these so called leaks ever substanciated by the Press? If not Tulsi Gabbard planted them, and well.. Pick your story what have I been subjected to since 2017? Take your pick if it's meth lol wtf are you guys doing?
 
 ![image](https://github.com/user-attachments/assets/ec2b1fd1-e5a3-4ba9-89ac-7d68347fe8e7)
 
