@@ -33,8 +33,14 @@ You guys, yes you Tulsi, don't even have 15 different agencies? Whom the fuck co
 
 ![image](https://github.com/user-attachments/assets/abb1579d-d746-468d-a74b-ebc6ab564d7a)
 
-https://www.nytimes.com/2025/02/25/us/politics/gabbard-nsa-firing-explicit-chat.html
-
 You have 4: the CIA, DIA, NSA, and FBI, as part of the NIP. (National Intelligence Program)
 
 https://en.wikipedia.org/wiki/Director_of_National_Intelligence
+
+
+https://www.nytimes.com/2025/02/25/us/politics/gabbard-nsa-firing-explicit-chat.html
+
+So I have the same position as Trump on this, and you guys actually still made me believe this was real, and it was about men not being allowed to play in female sports? wtf? u have retard gitmo
+
+![image](https://github.com/user-attachments/assets/cee3340b-0843-49b5-a6a9-f5f0b13c981a)
+
