@@ -46,3 +46,8 @@ I deleted old videos, but oh no my front end web UI for YouTube is apparently te
 https://www.youtube.com/watch?v=6UTQevHf1Bs
 
 Does my fucking Twitter app, or less talkin' on YouTube app have any connections with their backend? Yes there's capacity to deploy payload built in yet it's hard to extract ?? app to run ghidra on. if you do, often the structure of the app is printed to you if you click each block of code; then you see the decompiled code
+
+DNI ovorsees 4-5 yet Google's genai that'll sue you says 18 for IC; same search 
+
+![image](https://github.com/user-attachments/assets/5b0b939e-43a5-46a6-9edb-50d2a3d0bae4)
+
