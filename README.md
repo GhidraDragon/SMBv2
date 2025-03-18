@@ -13,3 +13,11 @@ but nobody has time bullshitting or getting a rough what types exist?
 These types of press release leaked to the press is always "placed." You have no clue where the Press got their knowledge. This press release was also unsubstanciated by the Press.
 
 ![image](https://github.com/user-attachments/assets/90185d6e-9e6f-444a-b025-357d84ab97c4)
+
+Also there existed Pegasus + its Operators since 2017.
+
+https://www.youtube.com/watch?v=6UTQevHf1Bs
+
+eg Mark Leon keeps claiming I'm lying about YouTube UI etc.
+
+It's basically just the Pegasus program, but it runs on Android and MacOS too!
