@@ -10,6 +10,6 @@ but nobody has time bullshitting or getting a rough what types exist?
 
 ----
 
-These types of press reports leaked to the press is always "placed." You have no clue where the Press got their knowledge
+These types of press release leaked to the press is always "placed." You have no clue where the Press got their knowledge. This press release was also unsubstanciated by the Press.
 
 ![image](https://github.com/user-attachments/assets/90185d6e-9e6f-444a-b025-357d84ab97c4)
