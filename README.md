@@ -21,3 +21,9 @@ https://www.youtube.com/watch?v=6UTQevHf1Bs
 eg Mark Leon keeps claiming I'm lying about YouTube UI etc.
 
 It's basically just the Pegasus program, but it runs on Android and MacOS too!
+
+---
+
+eg my Mom yesterday, after stealing my passport a few months ago, then 2 expired passports + social security card, barged in (yes that happens a lot) with Social Security Administration on the phone yelling at me to "go apply for benefits bitch"
+
+Actually I plan to renounce my US citizenship ASAP!
