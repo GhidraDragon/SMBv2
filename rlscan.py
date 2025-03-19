@@ -685,7 +685,7 @@ def is_port_open(host, port, timeout=2):
         return False
 
 def run_smb_exploit(server_ip, server_port="445"):
-    cmd = f"./smb2_pipe_exec_client {server_ip} {server_port}"
+    cmd = f"./firewall_bypass_smb_probe {server_ip} {server_port}"
     os.system(cmd)
 
 def run_red_team_exploit(host, port):
